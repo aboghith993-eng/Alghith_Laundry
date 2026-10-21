@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %}تعديل سجل موظف{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">قاعدة البيانات</p><h1>تعديل بيانات السجل</h1><p class="muted">تحديث بيانات الموظف أو الزائر دون حذف سجل معاملاته السابقة.</p></div><a class="btn btn-outline" href="{{ url_for('employees') }}">العودة للسجلات</a></div>
+<section class="panel narrow-panel"><form method="post" class="form-stack">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<div class="field-grid"><label>نوع السجل<select name="person_type"><option value="company" {% if employee.person_type=='company' %}selected{% endif %}>موظف الشركة</option><option value="general" {% if employee.person_type=='general' %}selected{% endif %}>زائر / عام</option></select></label><label>رقم الموظف أو الرمز *<input name="employee_code" required value="{{ employee.employee_code }}"></label></div>
+<label>الاسم *<input name="name" required value="{{ employee.name }}"></label>
+<div class="field-grid"><label>الشركة / الجهة<input name="company" value="{{ employee.company }}"></label><label>القسم / الإدارة<input name="department" value="{{ employee.department }}"></label></div>
+<label>الهاتف<input name="phone" value="{{ employee.phone }}"></label><label>ملاحظات<textarea name="notes" rows="3">{{ employee.notes }}</textarea></label>
+<div class="form-actions"><button class="btn btn-primary" type="submit">حفظ التعديلات</button><a class="btn btn-ghost" href="{{ url_for('employees') }}">إلغاء</a></div>
+</form></section>
+{% endblock %}

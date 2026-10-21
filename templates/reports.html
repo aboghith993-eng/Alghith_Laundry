@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}التقارير والمستحقات | نظام مغسلة الشركة{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">الرفع المالي والإداري</p><h1>التقارير والمستحقات</h1><p class="muted">حدّد الفترة، راجع الطلبات، ثم اطبع الكشف أو صدّره إلى CSV لاستكمال إجراءات المستحقات.</p></div><div class="heading-actions no-print"><button class="btn btn-primary" type="button" onclick="window.print()">طباعة التقرير</button><a class="btn btn-outline" href="{{ url_for('report_export', **request.args) }}">تصدير CSV</a></div></div>
+<section class="metrics-grid report-metrics">
+  <article class="metric-card"><div class="metric-icon green">✓</div><div><span>المستحقات المعتمدة</span><strong class="metric-money">{{ approved_total|money }}</strong><small>{{ currency }}</small></div></article>
+  <article class="metric-card"><div class="metric-icon amber">◷</div><div><span>مبالغ تنتظر الاعتماد</span><strong class="metric-money">{{ pending_total|money }}</strong><small>لا ترفع كمستحقات قبل التأكيد</small></div></article>
+  <article class="metric-card"><div class="metric-icon blue">▤</div><div><span>عدد الطلبات في الكشف</span><strong>{{ orders|length }}</strong><small>ضمن الفترة المحددة والحالة المختارة</small></div></article>
+  <article class="metric-card"><div class="metric-icon rose">×</div><div><span>قيمة الطلبات المرفوضة</span><strong class="metric-money">{{ rejected_total|money }}</strong><small>{{ currency }}</small></div></article>
+</section>
+<section class="panel report-panel">
+  <form method="get" class="filter-bar report-filter no-print"><label>من تاريخ<input type="date" name="from" value="{{ date_from }}"></label><label>إلى تاريخ<input type="date" name="to" value="{{ date_to }}"></label><label>حالة الطلب<select name="status"><option value="all" {% if status_filter=='all' %}selected{% endif %}>كل الحالات</option><option value="approved" {% if status_filter=='approved' %}selected{% endif %}>معتمد فقط</option><option value="pending" {% if status_filter=='pending' %}selected{% endif %}>بانتظار التأكيد</option><option value="rejected" {% if status_filter=='rejected' %}selected{% endif %}>مرفوض</option></select></label><label class="search-field">بحث<input name="q" value="{{ q }}" placeholder="الموظف أو رقم الطلب"></label><button class="btn btn-outline" type="submit">تحديث التقرير</button></form>
+  <div class="print-report-heading"><h2>{{ company_name }} — كشف خدمات المغسلة</h2><p>الفترة من {{ date_from }} إلى {{ date_to }} · العملة: {{ currency }}</p><p>تاريخ إعداد التقرير: {{ today }}</p></div>
+  <div class="table-wrap"><table class="report-table"><thead><tr><th>#</th><th>رقم الطلب / التاريخ</th><th>الموظف / المستفيد</th><th>بيان الخدمات</th><th>الإجمالي</th><th>الحالة</th><th class="sign-column">توقيع الموظف</th></tr></thead><tbody>
+  {% for order in orders %}<tr><td>{{ loop.index }}</td><td><strong>{{ order.reference }}</strong><small class="cell-sub">{{ order.service_date }}</small></td><td>{{ order.person_name or order.employee_name }}<small class="cell-sub">{{ order.employee_code }} · {{ order.company or '' }}</small></td><td>{% for item in lines[order.id] %}<div class="report-line-item">{{ item.item_name }} — {{ item.quantity|money }} {{ item.unit }} × {{ item.unit_price|money }}</div>{% endfor %}</td><td class="nowrap"><strong>{{ order.subtotal|money }}</strong><small class="cell-sub">{{ currency }}</small></td><td><span class="status status-{{ order.status }}">{{ {'pending':'بانتظار التأكيد','approved':'معتمد','rejected':'مرفوض'}[order.status] }}</span><small class="cell-sub">{{ 'تم التسليم' if order.fulfillment_status=='delivered' else 'لم يُسلّم' }}</small></td><td class="sign-column"><div class="report-sign-space"></div></td></tr>
+  {% else %}<tr><td colspan="7"><div class="empty-inline">لا توجد بيانات للفترة المحددة.</div></td></tr>{% endfor %}
+  </tbody><tfoot><tr><th colspan="4">إجمالي المعتمد (المستحق للرفع)</th><th colspan="3">{{ approved_total|money }} {{ currency }}</th></tr><tr><th colspan="4">طلبات بانتظار التأكيد (لا تدخل في إجمالي المستحقات بعد)</th><th colspan="3">{{ pending_total|money }} {{ currency }}</th></tr></tfoot></table></div>
+  <div class="report-signatures"><div><span>إعداد متعهد المغسلة</span><div></div><small>الاسم والتوقيع والتاريخ</small></div><div><span>مراجعة مشرف السكن</span><div></div><small>الاسم والتوقيع والتاريخ</small></div><div><span>اعتماد الإدارة</span><div></div><small>الاسم والتوقيع والتاريخ</small></div></div>
+  <div class="report-footnote">ملاحظة: المستحقات المعتمدة لا تشمل الطلبات المعلّقة أو المرفوضة. يرجى مطابقة الكشف مع التواقيع والمستندات الورقية قبل الرفع المالي.</div>
+</section>
+{% if summary and summary.rows %}
+<section class="panel report-panel summary-panel">
+  <div class="panel-heading"><div><h2>ملخص كميات الغسيل لكل موظف</h2><p>إجمالي القطع المغسولة لكل صنف (لباس مخدة، بطانية، ملاية سرير، وغيرها) لكل موظف ضمن الفترة {{ date_from }} إلى {{ date_to }}.</p></div><span class="soft-pill">{{ summary.rows|length }} موظف</span></div>
+  <div class="table-wrap"><table class="report-table summary-table"><thead><tr><th>#</th><th>رقم الموظف</th><th>الاسم</th><th>نوع الخدمة</th>{% for column in summary.columns %}<th>{{ column }}</th>{% endfor %}<th>إجمالي القطع</th></tr></thead><tbody>
+  {% for row in summary.rows %}<tr><td>{{ loop.index }}</td><td><strong>{{ row.employee_code }}</strong></td><td>{{ row.employee_name }}</td><td>{% if row.service_type %}<span class="soft-pill">{{ row.service_type }}</span>{% else %}—{% endif %}</td>{% for column in summary.columns %}<td class="nowrap">{{ row.quantities.get(column, 0)|money if row.quantities.get(column) else '—' }}</td>{% endfor %}<td class="nowrap"><strong>{{ row.total|money }}</strong></td></tr>
+  {% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+{% if service_type_totals and service_type_totals.rows %}
+<section class="panel report-panel summary-panel">
+  <div class="panel-heading"><div><h2>ملخص الكميات حسب نوع الخدمة</h2><p>إجمالي القطع المغسولة لكل صنف مجمّعة حسب نوع خدمة الموظف (سكن، نقل، نقل-سكن، أخرى).</p></div><span class="soft-pill">{{ service_type_totals.rows|length }} نوع</span></div>
+  <div class="table-wrap"><table class="report-table summary-table"><thead><tr><th>#</th><th>نوع الخدمة</th>{% for column in service_type_totals.columns %}<th>{{ column }}</th>{% endfor %}<th>إجمالي القطع</th></tr></thead><tbody>
+  {% for row in service_type_totals.rows %}<tr><td>{{ loop.index }}</td><td><span class="soft-pill">{{ row.label }}</span></td>{% for column in service_type_totals.columns %}<td class="nowrap">{{ row.quantities.get(column, 0)|money if row.quantities.get(column) else '—' }}</td>{% endfor %}<td class="nowrap"><strong>{{ row.total|money }}</strong></td></tr>
+  {% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+{% endblock %}

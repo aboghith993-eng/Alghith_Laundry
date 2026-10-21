@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block title %}تسجيل الدخول | نظام مغسلة الشركة{% endblock %}
+{% block auth_content %}
+<section class="login-card">
+  <div class="login-emblem">غ</div>
+  <p class="eyebrow">إدارة خدمات المغسلة والسكن</p>
+  <h1>تسجيل الدخول</h1>
+  <p class="muted">ادخل إلى حسابك لمتابعة الطلبات أو مراجعتها واعتمادها.</p>
+  <form method="post" class="form-stack login-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>اسم المستخدم<input name="username" autocomplete="username" required autofocus placeholder="أدخل اسم المستخدم"></label>
+    <label>كلمة المرور<input name="password" type="password" autocomplete="current-password" required placeholder="أدخل كلمة المرور"></label>
+    <button class="btn btn-primary btn-wide" type="submit">دخول إلى النظام <span>←</span></button>
+  </form>
+  <div class="login-note"><strong>للتشغيل الأول فقط</strong><br>راجع ملف README_AR.md لمعرفة بيانات الحسابات الافتراضية وطريقة تغيير كلمات المرور.</div>
+  <p class="login-bottom">واجهة عربية · مناسبة للجوال · تقارير قابلة للطباعة</p>
+</section>
+{% endblock %}

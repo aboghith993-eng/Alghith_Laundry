@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}الخدمات والأسعار | نظام مغسلة الشركة{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">التحكم بالتكلفة</p><h1>الخدمات والأسعار</h1><p class="muted">عدّل أسعار الغسيل والكي والمفروشات. السعر الجديد يطبق على الطلبات الجديدة فقط.</p></div><span class="soft-pill">العملة: {{ currency }}</span></div>
+<section class="panel">
+  <div class="panel-heading"><div><h2>قائمة الخدمات الحالية</h2><p>يمكن ضبط السعر والوحدة لكل خدمة على حدة.</p></div></div>
+  <div class="table-wrap"><table><thead><tr><th>رمز الخدمة</th><th>اسم الخدمة</th><th>وحدة الحساب</th><th>السعر / الوحدة</th><th>الحالة</th><th>حفظ</th></tr></thead><tbody>
+  {% for service in services %}<tr><form method="post" action="{{ url_for('rate_edit', item_id=service.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><td><strong>{{ service.code }}</strong></td><td><input class="table-input service-name-input" name="name" value="{{ service.name }}" required></td><td><input class="table-input unit-input" name="unit" value="{{ service.unit }}" required></td><td><input class="table-input rate-input" name="rate" type="number" min="0" step="0.01" value="{{ service.rate }}" required></td><td><span class="status {{ 'status-approved' if service.active else 'status-rejected' }}">{{ 'نشط' if service.active else 'موقوف' }}</span></td><td><div class="table-actions"><button class="btn btn-outline btn-small" type="submit">حفظ</button></form><form method="post" action="{{ url_for('rate_toggle', item_id=service.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link-button" type="submit">{{ 'إيقاف' if service.active else 'تفعيل' }}</button></form></div></td></tr>{% endfor %}
+  </tbody></table></div>
+  <div class="notice-card inline-notice"><strong>مهم قبل بدء العمل</strong><p>أسعار الخدمات الافتراضية تبدأ بصفر لأنها غير محددة من الإدارة. أدخل الأسعار الفعلية قبل إنشاء طلبات مالية. كل طلب يحتفظ بسعر الوحدة المسجل وقت إنشائه حتى لا تتغير الفواتير القديمة عند تحديث الأسعار.</p></div>
+</section>
+<section class="panel add-service-panel"><div class="panel-heading"><div><h2>إضافة خدمة أخرى</h2><p>لأي خدمة إضافية أو نوع مفروشات جديد.</p></div></div>
+<form method="post" class="form-inline-add"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>رمز الخدمة<input name="code" placeholder="مثال: CURTAIN" required></label><label class="grow-field">اسم الخدمة<input name="name" placeholder="مثال: غسل ستائر" required></label><label>الوحدة<input name="unit" value="قطعة" required></label><label>السعر<input name="rate" type="number" min="0" step="0.01" value="0" required></label><button type="submit" class="btn btn-primary">إضافة الخدمة</button></form></section>
+{% endblock %}

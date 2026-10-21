@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block title %}لوحة المتابعة | نظام مغسلة الشركة{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">ملخص التشغيل</p><h1>لوحة المتابعة</h1><p class="muted">متابعة أعمال المغسلة وطلبات الموظفين واعتمادات مشرف السكن.</p></div>
+  {% if current_user.role in ['admin','contractor'] %}<a class="btn btn-primary" href="{{ url_for('transaction_new') }}">＋ تسجيل طلب جديد</a>{% endif %}
+</div>
+<section class="metrics-grid">
+  <article class="metric-card"><div class="metric-icon teal">♙</div><div><span>الموظفون المسجلون</span><strong>{{ metrics.employees }}</strong><small>سجلات الشركة النشطة</small></div></article>
+  <article class="metric-card"><div class="metric-icon amber">◷</div><div><span>طلبات بانتظار التأكيد</span><strong>{{ metrics.pending }}</strong><small>تحتاج مراجعة مشرف السكن</small></div></article>
+  <article class="metric-card"><div class="metric-icon blue">✓</div><div><span>طلبات معتمدة هذا الشهر</span><strong>{{ metrics.month_approved }}</strong><small>من {{ today[:7] }}</small></div></article>
+  <article class="metric-card"><div class="metric-icon green">ر.ي</div><div><span>المستحق المعتمد هذا الشهر</span><strong class="metric-money">{{ metrics.month_amount|money }}</strong><small>{{ currency }}</small></div></article>
+</section>
+<div class="dashboard-grid">
+  <section class="panel">
+    <div class="panel-heading"><div><h2>أحدث طلبات المغسلة</h2><p>آخر المعاملات التي تم تسجيلها</p></div><a class="text-link" href="{{ url_for('transactions') }}">عرض الكل ←</a></div>
+    {% if latest %}
+    <div class="table-wrap"><table><thead><tr><th>رقم الطلب</th><th>الموظف / المستفيد</th><th>التاريخ</th><th>القيمة</th><th>الحالة</th><th></th></tr></thead><tbody>
+    {% for order in latest %}<tr><td><strong>{{ order.reference }}</strong></td><td>{{ order.person_name or order.employee_name }}<small class="cell-sub">{{ order.employee_code }}</small></td><td>{{ order.service_date }}</td><td class="nowrap">{{ order.subtotal|money }}</td><td><span class="status status-{{ order.status }}">{{ {'pending':'بانتظار التأكيد','approved':'معتمد','rejected':'مرفوض'}[order.status] }}</span><small class="cell-sub">{{ 'تم التسليم' if order.fulfillment_status=='delivered' else 'لم يُسلّم' }}</small></td><td><a class="icon-link" href="{{ url_for('transaction_detail', order_id=order.id) }}">عرض</a></td></tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<div class="empty-state"><span>▤</span><strong>لا توجد طلبات بعد</strong><p>ابدأ بتسجيل أول طلب للمغسلة.</p>{% if current_user.role in ['admin','contractor'] %}<a class="btn btn-primary" href="{{ url_for('transaction_new') }}">تسجيل أول طلب</a>{% endif %}</div>{% endif %}
+  </section>
+  <aside class="panel quick-panel">
+    <div class="panel-heading"><div><h2>اختصارات العمل</h2><p>الوصول السريع للمهام</p></div></div>
+    {% if current_user.role in ['admin','contractor'] %}<a class="quick-action" href="{{ url_for('transaction_new') }}"><span class="quick-icon">＋</span><span><strong>تسجيل خدمة جديدة</strong><small>غسيل أو كي أو مفروشات</small></span><b>←</b></a>{% endif %}
+    {% if current_user.role in ['admin','supervisor'] %}<a class="quick-action" href="{{ url_for('transactions', status='pending') }}"><span class="quick-icon amber">◷</span><span><strong>طلبات بحاجة للتأكيد</strong><small>مراجعة واعتماد السجلات</small></span><b>←</b></a><a class="quick-action" href="{{ url_for('employees') }}"><span class="quick-icon blue">♙</span><span><strong>قاعدة بيانات الموظفين</strong><small>إضافة أو استيراد البيانات</small></span><b>←</b></a>{% endif %}
+    <a class="quick-action" href="{{ url_for('reports') }}"><span class="quick-icon green">▥</span><span><strong>تقرير المستحقات</strong><small>حدد فترة واطبع الكشف</small></span><b>←</b></a>
+    <div class="notice-card"><strong>تنبيه مهم</strong><p>تظهر قيمة الخدمة وفق السعر وقت تسجيل الطلب. لا تدخل الطلبات في المستحقات إلا بعد تأكيد التسليم ثم اعتمادها من مشرف السكن.</p></div>
+  </aside>
+</div>
+{% endblock %}

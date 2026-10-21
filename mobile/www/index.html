@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <meta name="theme-color" content="#123b35">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+  <title>المغسلة — تطبيق الجوال</title>
+</head>
+<body>
+  <!-- شاشة الدخول -->
+  <section id="screen-login" class="screen">
+    <div class="login-wrap">
+      <div class="login-card">
+        <img src="icons/icon-192.png" alt="شعار المغسلة" class="login-logo">
+        <h1>نظام إدارة المغسلة</h1>
+        <p class="muted">تطبيق الجوال — يعمل دون اتصال ويزامن لاحقاً</p>
+        <form id="login-form" autocomplete="on">
+          <label class="field">
+            <span>اسم المستخدم</span>
+            <input type="text" id="login-username" name="username" autocomplete="username" required>
+          </label>
+          <label class="field">
+            <span>كلمة المرور</span>
+            <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+          </label>
+          <label class="field">
+            <span>عنوان الخادم</span>
+            <input type="text" id="login-server" name="server" placeholder="https://example.onrender.com" dir="ltr" autocapitalize="off" autocorrect="off" spellcheck="false">
+            <small class="muted" id="login-server-hint">مطلوب في تطبيق الهاتف — عنوان الخادم الذي يعمل عليه النظام.</small>
+          </label>
+          <div class="row">
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-test-server">فحص الاتصال</button>
+            <span class="small muted" id="login-server-status"></span>
+          </div>
+          <div id="login-error" class="alert alert-error hidden"></div>
+          <button type="submit" class="btn btn-primary btn-block" id="login-submit">تسجيل الدخول</button>
+        </form>
+        <form id="pin-form" class="hidden">
+          <div class="divider"><span>أو</span></div>
+          <input type="text" name="username" id="pin-username" autocomplete="username" class="visually-hidden" tabindex="-1" aria-hidden="true">
+          <label class="field">
+            <span>رمز الدخول المحلي</span>
+            <input type="password" id="login-pin" name="pin" inputmode="numeric" autocomplete="current-password" placeholder="••••">
+          </label>
+          <button type="submit" class="btn btn-ghost btn-block" id="pin-submit">فتح بالرمز المحلي (دون اتصال)</button>
+        </form>
+        <p class="muted small" id="login-offline-hint"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- التطبيق -->
+  <div id="app-shell" class="hidden">
+    <header class="topbar">
+      <button class="icon-btn" id="btn-menu" aria-label="القائمة">☰</button>
+      <div class="topbar-title" id="page-title">الرئيسية</div>
+      <div class="topbar-actions">
+        <span class="sync-badge" id="sync-badge" title="حالة المزامنة">—</span>
+        <button class="icon-btn" id="btn-sync" aria-label="مزامنة الآن">⟳</button>
+        <button class="icon-btn" id="btn-logout" aria-label="خروج">⎋</button>
+      </div>
+    </header>
+
+    <div id="offline-banner" class="banner hidden">
+      لا يوجد اتصال بالإنترنت — يتم الحفظ محلياً وسيُرسل عند عودة الاتصال.
+    </div>
+
+    <main id="page-container" class="page"></main>
+
+    <nav class="tabbar">
+      <button class="tab active" data-page="home"><span>⌂</span>الرئيسية</button>
+      <button class="tab" data-page="new"><span>＋</span>طلب جديد</button>
+      <button class="tab" data-page="orders"><span>≡</span>الطلبات</button>
+      <button class="tab" data-page="reports"><span>▤</span>التقارير</button>
+      <button class="tab" data-page="settings"><span>⚙</span>الإعدادات</button>
+    </nav>
+  </div>
+
+  <div id="toast-area" class="toast-area"></div>
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal" id="modal-box"></div>
+  </div>
+
+  <script type="module" src="js/bootstrap.js"></script>
+</body>
+</html>

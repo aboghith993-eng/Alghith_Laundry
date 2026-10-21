@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block title %}حسابي وكلمة المرور{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">حماية الحساب</p><h1>حسابي وكلمة المرور</h1><p class="muted">غيّر كلمة المرور الافتراضية قبل إدخال البيانات الفعلية.</p></div></div>
+<section class="panel narrow-panel"><div class="account-profile"><div class="profile-avatar">{{ current_user.full_name[:1] }}</div><div><h2>{{ current_user.full_name }}</h2><p>{{ current_user.username }} · {{ role_labels[current_user.role] }}</p></div></div><form method="post" class="form-stack"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>كلمة المرور الحالية<input type="password" name="old_password" required autocomplete="current-password"></label><label>كلمة المرور الجديدة<input type="password" name="new_password" minlength="8" required autocomplete="new-password"></label><label>تأكيد كلمة المرور الجديدة<input type="password" name="confirm_password" minlength="8" required autocomplete="new-password"></label><button class="btn btn-primary" type="submit">تحديث كلمة المرور</button></form></section>
+{% endblock %}

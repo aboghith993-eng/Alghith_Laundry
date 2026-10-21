@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}طلبات المغسلة | نظام مغسلة الشركة{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">سجل العمليات</p><h1>طلبات المغسلة</h1><p class="muted">كل عملية تسجل عند الاستلام، ثم يثبت المتعهد التسليم بعد الغسيل والكي قبل اعتماد مشرف السكن للمستحقات.</p></div>{% if current_user.role in ['admin','contractor'] %}<a class="btn btn-primary" href="{{ url_for('transaction_new') }}">＋ تسجيل طلب جديد</a>{% endif %}</div>
+<section class="panel">
+  <form method="get" class="filter-bar transaction-filter">
+    <label>من تاريخ<input type="date" name="from" value="{{ date_from }}"></label><label>إلى تاريخ<input type="date" name="to" value="{{ date_to }}"></label>
+    <label>حالة الطلب<select name="status"><option value="all" {% if status_filter=='all' %}selected{% endif %}>كل الحالات</option><option value="pending" {% if status_filter=='pending' %}selected{% endif %}>بانتظار التأكيد</option><option value="approved" {% if status_filter=='approved' %}selected{% endif %}>معتمد</option><option value="rejected" {% if status_filter=='rejected' %}selected{% endif %}>مرفوض</option></select></label>
+    <label class="search-field">بحث<input name="q" value="{{ q }}" placeholder="رقم الطلب أو الموظف"></label><button class="btn btn-outline" type="submit">تطبيق</button><a class="btn btn-ghost" href="{{ url_for('transactions') }}">مسح</a>
+  </form>
+  <div class="table-wrap"><table><thead><tr><th>رقم الطلب / التاريخ</th><th>الموظف أو المستفيد</th><th>الخدمات</th><th>القيمة</th><th>مدخل الطلب</th><th>الحالة</th><th></th></tr></thead><tbody>
+  {% for order in orders %}<tr><td><strong>{{ order.reference }}</strong><small class="cell-sub">{{ order.service_date }}</small></td><td>{{ order.person_name or order.employee_name }}<small class="cell-sub">{{ order.employee_code }} · {{ order.company or '—' }}</small></td><td><span class="cell-sub">{{ order.id }} · انقر على عرض للتفاصيل</span></td><td class="nowrap"><strong>{{ order.subtotal|money }}</strong><small class="cell-sub">{{ currency }}</small></td><td>{{ order.creator_name }}</td><td><span class="status status-{{ order.status }}">{{ {'pending':'بانتظار التأكيد','approved':'معتمد','rejected':'مرفوض'}[order.status] }}</span><small class="cell-sub">{{ 'تم التسليم' if order.fulfillment_status=='delivered' else 'لم يُسلّم بعد' }}</small></td><td><a class="btn btn-outline btn-small" href="{{ url_for('transaction_detail', order_id=order.id) }}">عرض التفاصيل</a></td></tr>
+  {% else %}<tr><td colspan="7"><div class="empty-state compact-empty"><span>▤</span><strong>لا توجد طلبات بهذه المواصفات</strong><p>غيّر الفترة أو حالة الطلب أو سجّل طلباً جديداً.</p></div></td></tr>{% endfor %}
+  </tbody></table></div>
+  <div class="table-bottom-note">عدد الطلبات في النتيجة: <strong>{{ orders|length }}</strong></div>
+</section>
+{% endblock %}

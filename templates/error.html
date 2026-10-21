@@ -1,0 +1,5 @@
+{% extends 'base.html' %}
+{% block title %}{{ code }} — {{ heading }}{% endblock %}
+{% block content %}
+<section class="panel error-panel"><div class="error-code">{{ code }}</div><h1>{{ heading }}</h1><p>{{ message }}</p><a class="btn btn-primary" href="{{ url_for('dashboard') if current_user else url_for('login') }}">العودة إلى النظام</a></section>
+{% endblock %}

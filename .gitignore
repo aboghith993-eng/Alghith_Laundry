@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+instance/*.db
+instance/*.db-shm
+instance/*.db-wal
+instance/.secret_key
+.env
+.env.*
+!.env.example
+*.log
+
+# تطبيق الجوال (Capacitor / Android)
+mobile/node_modules/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/app/src/main/assets/public/
+mobile/android/app/src/main/assets/capacitor.config.json
+mobile/android/app/src/main/assets/capacitor.plugins.json
+# مفتاح التوقيع: لا يُرفع إلى GitHub — احتفظ بنسخة آمنة منه خارج المستودع.
+*.keystore

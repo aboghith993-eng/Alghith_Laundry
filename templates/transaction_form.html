@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% block title %}تسجيل طلب مغسلة جديد{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">إدخال معاملة جديدة</p><h1>تسجيل طلب مغسلة</h1><p class="muted">اختر الموظف وأضف جميع قطع الملابس والمفروشات في طلب واحد.</p></div><a class="btn btn-outline" href="{{ url_for('transactions') }}">إلغاء والعودة</a></div>
+<form method="post" class="order-form" data-order-form>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<section class="panel">
+  <div class="panel-heading"><div><h2>بيانات الموظف أو المستفيد</h2><p>تأكد من اختيار السجل الصحيح قبل تسجيل الخدمات.</p></div><span class="step-number">01</span></div>
+  <div class="field-grid three-col">
+    <label>الموظف / المستفيد *<input type="search" data-employee-search placeholder="ابحث برقم الموظف أو الاسم" autocomplete="off"><select name="employee_id" id="employee-select" data-search-select required><option value="">اختر من قاعدة البيانات</option>{% for employee in employees %}<option value="{{ employee.id }}" data-type="{{ employee.person_type }}" data-code="{{ employee.employee_code }}" data-service="{{ employee.service_type }}" data-shift="{{ employee.shift_system }}" data-shift-desc="{{ employee.shift_description }}" data-work="{{ employee.work_days }}" data-rest="{{ employee.rest_days }}" data-anchor="{{ employee.cycle_anchor }}" data-status="{{ employee.status_label }}" data-housing="{{ employee.housing_location }}" data-job="{{ employee.job_title }}" {% if employee.employee_code=='GEN-001' %}data-general="yes"{% endif %}>{{ employee.employee_code }} — {{ employee.name }}{% if employee.person_type=='general' %} (سجل عام){% endif %}</option>{% endfor %}</select><small class="field-help">لضيوف خارج الشركة اختر «موظف عام» واكتب اسم الشخص.</small></label>
+    <label>تاريخ تقديم الخدمة *<input type="date" name="service_date" value="{{ today }}" required></label>
+    <label id="person-name-wrap" class="hidden-field">اسم الزائر / الضيف *<input type="text" name="person_name" id="person-name" placeholder="الاسم الفعلي للشخص"></label>
+  </div>
+  <div class="shift-hint hidden-field" data-shift-hint>
+    <div class="shift-hint-main"><strong>بيانات السكن والدوام</strong><span data-shift-summary></span></div>
+    <div class="shift-hint-warn hidden-field" data-shift-warning></div>
+  </div>
+  <div class="field-grid"><label>ملاحظات الطلب<textarea name="notes" rows="2" placeholder="رقم الغرفة أو ملاحظة الاستلام (اختياري)"></textarea></label><div class="info-note"><strong>مسار الاعتماد</strong><p>يسجّل هذا النموذج استلام القطع من الموظف. بعد الغسيل والكي، يؤكد المتعهد تسليم القطع النظيفة، ثم يراجع مشرف السكن الطلب. لا تدخل المستحقات إلا بعد التسليم والاعتماد.</p></div></div>
+</section>
+<section class="panel">
+  <div class="panel-heading"><div><h2>تفاصيل الخدمات والقطع</h2><p>أضف سطراً لكل نوع خدمة مع الكمية المستلمة من الموظف.</p></div><span class="step-number">02</span></div>
+  <div class="order-lines" data-order-lines>
+    <div class="line-header"><span>الخدمة / الصنف</span><span>الكمية</span><span>سعر الوحدة</span><span>المجموع التقديري</span><span></span></div>
+    <div class="order-line" data-order-line>
+      <select name="service_item_id" required aria-label="الخدمة"><option value="">اختر الخدمة</option>{% for service in services %}<option value="{{ service.id }}" data-rate="{{ service.rate }}" data-unit="{{ service.unit }}">{{ service.name }} — {{ service.rate|money }} {{ currency }}/{{ service.unit }}</option>{% endfor %}</select>
+      <input type="number" name="quantity" min="0.01" step="0.01" value="1" required aria-label="الكمية">
+      <span class="line-rate">—</span><strong class="line-total">—</strong><button class="remove-line" type="button" data-remove-line aria-label="حذف السطر" title="حذف السطر">×</button>
+    </div>
+  </div>
+  <button type="button" class="btn btn-outline add-line-btn" data-add-line>＋ إضافة صنف آخر</button>
+  <div class="order-total-row"><div><span>الإجمالي التقديري</span><small>السعر النهائي وفق الأسعار الحالية، ويعتمد بعد مراجعة مشرف السكن.</small></div><strong><span data-grand-total>0.00</span> <small>{{ currency }}</small></strong></div>
+  <div class="form-actions form-actions-end"><a href="{{ url_for('transactions') }}" class="btn btn-ghost">إلغاء</a><button type="submit" class="btn btn-primary btn-large">حفظ طلب الاستلام <span>←</span></button></div>
+</section>
+</form>
+<template id="order-line-template"><div class="order-line" data-order-line>
+<select name="service_item_id" required aria-label="الخدمة"><option value="">اختر الخدمة</option>{% for service in services %}<option value="{{ service.id }}" data-rate="{{ service.rate }}" data-unit="{{ service.unit }}">{{ service.name }} — {{ service.rate|money }} {{ currency }}/{{ service.unit }}</option>{% endfor %}</select>
+<input type="number" name="quantity" min="0.01" step="0.01" value="1" required aria-label="الكمية"><span class="line-rate">—</span><strong class="line-total">—</strong><button class="remove-line" type="button" data-remove-line aria-label="حذف السطر">×</button></div></template>
+{% endblock %}

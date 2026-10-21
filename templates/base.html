@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#123b35">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+  <meta name="description" content="نظام متابعة خدمات مغسلة الشركة ومفروشات السكن والتقارير المالية">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <title>{% block title %}نظام مغسلة الشركة{% endblock %}</title>
+</head>
+<body>
+{% if current_user %}
+  <header class="topbar no-print">
+    <a class="brand" href="{{ url_for('dashboard') }}">
+      <span class="brand-mark">غ</span>
+      <span><strong>{{ company_name }}</strong><small>إدارة خدمات الغسيل والكي</small></span>
+    </a>
+    <button class="menu-toggle" type="button" aria-label="فتح القائمة" data-menu-toggle>☰</button>
+    <div class="user-area">
+      <span class="user-name">{{ current_user.full_name }}<small>{{ role_labels[current_user.role] }}</small></span>
+      <a class="avatar" href="{{ url_for('account') }}" title="حسابي">{{ current_user.full_name[:1] }}</a>
+      <form method="post" action="{{ url_for('logout') }}" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-ghost btn-small" type="submit">خروج</button>
+      </form>
+    </div>
+  </header>
+  <div class="app-shell">
+    <aside class="sidebar no-print" data-sidebar>
+      <div class="side-caption">القائمة الرئيسية</div>
+      <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><span>▦</span> لوحة المتابعة</a>
+      <a class="nav-link {% if request.endpoint in ['transactions','transaction_new','transaction_detail'] %}active{% endif %}" href="{{ url_for('transactions') }}"><span>▤</span> طلبات المغسلة</a>
+      {% if current_user.role in ['admin','supervisor'] %}
+      <a class="nav-link {% if request.endpoint in ['employees','employee_edit','employees_import'] %}active{% endif %}" href="{{ url_for('employees') }}"><span>♙</span> قاعدة الموظفين</a>
+      {% endif %}
+      <a class="nav-link {% if request.endpoint in ['reports','report_export'] %}active{% endif %}" href="{{ url_for('reports') }}"><span>▥</span> التقارير والمستحقات</a>
+      {% if current_user.role == 'admin' %}
+      <div class="side-caption side-caption-spaced">إدارة النظام</div>
+      <a class="nav-link {% if request.endpoint in ['rates','rate_edit','rate_toggle'] %}active{% endif %}" href="{{ url_for('rates') }}"><span>◇</span> الخدمات والأسعار</a>
+      <a class="nav-link {% if request.endpoint in ['users','user_reset','user_toggle'] %}active{% endif %}" href="{{ url_for('users') }}"><span>♧</span> المستخدمون والصلاحيات</a>
+      <a class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}" href="{{ url_for('settings') }}"><span>⚙</span> إعدادات النظام</a>
+      {% endif %}
+      <a class="nav-link {% if request.endpoint == 'account' %}active{% endif %}" href="{{ url_for('account') }}"><span>◉</span> حسابي وكلمة المرور</a>
+      <div class="sidebar-foot"><span class="online-dot"></span> {{ database_label }}</div>
+    </aside>
+    <main class="main-content">
+      <div class="flash-stack no-print">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, message in messages %}<div class="flash flash-{{ category }}">{{ message }}<button type="button" aria-label="إغلاق" data-dismiss>×</button></div>{% endfor %}
+        {% endwith %}
+      </div>
+      {% block content %}{% endblock %}
+      <footer class="app-footer no-print"><span>نظام مغسلة الشركة</span><span>سجل الطلبات · اعتماد السكن · تقرير المستحقات</span></footer>
+    </main>
+  </div>
+{% else %}
+  <main class="auth-layout">
+    <div class="flash-stack auth-flash">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}<div class="flash flash-{{ category }}">{{ message }}<button type="button" aria-label="إغلاق" data-dismiss>×</button></div>{% endfor %}
+      {% endwith %}
+    </div>
+    {% block auth_content %}{% endblock %}
+  </main>
+{% endif %}
+<script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+</body>
+</html>

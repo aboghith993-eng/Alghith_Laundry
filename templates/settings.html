@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block title %}إعدادات النظام{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">التخصيص</p><h1>إعدادات النظام</h1><p class="muted">تظهر هذه البيانات في واجهة النظام والكشوف المطبوعة.</p></div></div>
+<section class="panel narrow-panel"><div class="panel-heading"><div><h2>بيانات المنشأة</h2><p>تخصيص اسم المغسلة والعملة المستخدمة في التقرير.</p></div></div><form method="post" class="form-stack"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>اسم المغسلة / المنشأة<input name="company_name" value="{{ company_name_value }}" required placeholder="مثال: مغسلة الشركة"></label><label>اسم العملة<input name="currency" value="{{ currency_value }}" required placeholder="مثال: ريال يمني"></label><button class="btn btn-primary" type="submit">حفظ الإعدادات</button></form><div class="info-note settings-note"><strong>قاعدة البيانات</strong><p>مخزن البيانات المستخدم حالياً: {{ database_label }}. في النشر السحابي تُحفظ بيانات العمل في قاعدة Supabase المرتبطة بالخادم؛ احرص على إعداد نسخ احتياطية دورية من Supabase.</p></div></section>
+{% endblock %}

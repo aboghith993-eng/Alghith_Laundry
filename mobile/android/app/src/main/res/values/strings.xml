@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">المغسلة</string>
+    <string name="title_activity_main">المغسلة</string>
+    <string name="package_name">com.ycs.laundry</string>
+    <string name="custom_url_scheme">com.ycs.laundry</string>
+</resources>
