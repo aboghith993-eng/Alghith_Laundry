@@ -194,58 +194,132 @@ def verify(records: list[dict[str, str]], reference: date) -> dict[str, object]:
     }
 
 
+EMPLOYEE_COLUMNS = (
+    "employee_code",
+    "name",
+    "company",
+    "department",
+    "phone",
+    "person_type",
+    "active",
+    "notes",
+    "service_type",
+    "shift_system",
+    "shift_description",
+    "work_days",
+    "rest_days",
+    "cycle_start",
+    "cycle_anchor",
+    "cycle_day",
+    "status_label",
+    "departure_time",
+    "housing_location",
+    "job_title",
+    "gender",
+    "transport_class",
+)
+INT_COLUMNS = {"active", "work_days", "rest_days", "cycle_day"}
+
+
+def _row_tuple(values: dict[str, object]) -> tuple[object, ...]:
+    result: list[object] = []
+    for column in EMPLOYEE_COLUMNS:
+        value = values.get(column)
+        if column in INT_COLUMNS:
+            result.append(int(value or 0))
+        else:
+            result.append("" if value is None else str(value))
+    return tuple(result)
+
+
+def upsert_employees(db: object, translate: object, rows: list[tuple[object, ...]]) -> tuple[int, int]:
+    """إدخال/تحديث دفعة موظفين بجملة واحدة (executemany)."""
+    if not rows:
+        return 0, 0
+    placeholders = ",".join("?" for _ in EMPLOYEE_COLUMNS)
+    updates = ",".join(f"{column}=excluded.{column}" for column in EMPLOYEE_COLUMNS if column != "employee_code")
+    single = f"INSERT INTO employees({','.join(EMPLOYEE_COLUMNS)}) VALUES({placeholders}) ON CONFLICT(employee_code) DO UPDATE SET {updates}"
+    multi_values = "(" + placeholders + ")"
+    codes = [str(row[0]) for row in rows]
+    existing: set[str] = set()
+    for index in range(0, len(codes), 200):
+        chunk = codes[index : index + 200]
+        marks = ",".join("?" for _ in chunk)
+        found = db.execute(
+            translate(f"SELECT employee_code FROM employees WHERE employee_code IN ({marks})"),
+            tuple(chunk),
+        ).fetchall()
+        existing.update(str(row["employee_code"]) for row in found)
+    for index in range(0, len(rows), 100):
+        batch = rows[index : index + 100]
+        if len(batch) == 1:
+            db.execute(translate(single), batch[0])
+        else:
+            values_sql = ",".join(multi_values for _ in batch)
+            params = tuple(value for row in batch for value in row)
+            db.execute(
+                translate(
+                    f"INSERT INTO employees({','.join(EMPLOYEE_COLUMNS)}) VALUES {values_sql} "
+                    f"ON CONFLICT(employee_code) DO UPDATE SET {updates}"
+                ),
+                params,
+            )
+        db.commit()
+    inserted = sum(1 for code in codes if code not in existing)
+    return inserted, len(codes) - inserted
+
+
 def save_employees(employees: list[dict[str, object]]) -> tuple[int, int, int]:
     """حفظ الموظفين في قاعدة البيانات (تحديث للموجود وإضافة للجديد)."""
-    from app import app, get_db  # noqa: PLC0415
+    db, translate = open_connection()
+    rows: list[tuple[object, ...]] = []
+    for employee in employees:
+        values = dict(employee)
+        values["person_type"] = "company"
+        values["active"] = 1
+        rows.append(_row_tuple(values))
+    inserted, updated = upsert_employees(db, translate, rows)
+    db.close()
+    return inserted, updated, 0
 
-    inserted = updated = skipped = 0
-    with app.app_context():
-        db = get_db()
-        for employee in employees:
-            code = str(employee["employee_code"])
-            existing = db.execute(
-                "SELECT id FROM employees WHERE employee_code=?", (code,)
-            ).fetchone()
-            values = (
-                employee["name"],
-                employee["company"],
-                employee["department"],
-                employee["service_type"],
-                employee["shift_system"],
-                employee["shift_description"],
-                employee["work_days"],
-                employee["rest_days"],
-                employee["cycle_start"],
-                employee["cycle_anchor"],
-                employee["cycle_day"],
-                employee["status_label"],
-                employee["departure_time"],
-                employee["housing_location"],
-                employee["job_title"],
-                employee["gender"],
-                employee["transport_class"],
-            )
-            if existing:
-                db.execute(
-                    "UPDATE employees SET name=?,company=?,department=?,service_type=?,"
-                    "shift_system=?,shift_description=?,work_days=?,rest_days=?,cycle_start=?,"
-                    "cycle_anchor=?,cycle_day=?,status_label=?,departure_time=?,housing_location=?,"
-                    "job_title=?,gender=?,transport_class=?,active=1,person_type='company' WHERE id=?",
-                    (*values, existing["id"]),
-                )
-                updated += 1
-            else:
-                db.execute(
-                    "INSERT INTO employees(name,company,department,person_type,service_type,"
-                    "shift_system,shift_description,work_days,rest_days,cycle_start,cycle_anchor,"
-                    "cycle_day,status_label,departure_time,housing_location,job_title,gender,"
-                    "transport_class,employee_code,active) "
-                    "VALUES(?,?,?,'company',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
-                    (*values, code),
-                )
-                inserted += 1
-        db.commit()
-    return inserted, updated, skipped
+
+def open_connection() -> tuple[object, object]:
+    """اتصال بقاعدة البيانات: PostgreSQL عند وجود DATABASE_URL وإلا SQLite المحلية."""
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url:
+        import psycopg  # noqa: PLC0415
+        from psycopg.rows import dict_row  # noqa: PLC0415
+
+        conn = psycopg.connect(url, row_factory=dict_row, sslmode="require", prepare_threshold=None)
+        return conn, lambda sql: sql.replace("?", "%s")
+    import sqlite3  # noqa: PLC0415
+
+    path = Path(os.environ.get("DATABASE_PATH", str(BASE_DIR / "instance" / "laundry.db")))
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    return conn, lambda sql: sql
+
+
+def copy_from_sqlite(path: Path) -> dict[str, int]:
+    """نسخ كل سجلات الموظفين من قاعدة محلية إلى قاعدة الهدف (نفس الحقول تماماً)."""
+    if not path.exists():
+        raise SystemExit(f"لم يُعثر على قاعدة SQLite: {path}")
+    import sqlite3  # noqa: PLC0415
+
+    source = sqlite3.connect(str(path))
+    source.row_factory = sqlite3.Row
+    rows = source.execute(
+        f"SELECT {','.join(EMPLOYEE_COLUMNS)} FROM employees"
+    ).fetchall()
+    source.close()
+
+    db, translate = open_connection()
+    payload = [_row_tuple(dict(row)) for row in rows]
+    inserted, updated = upsert_employees(db, translate, payload)
+    db.close()
+    return {"inserted": inserted, "updated": updated, "total": len(payload)}
+
+
 
 
 def build_report(
@@ -323,7 +397,30 @@ def main() -> int:
     parser.add_argument("--company", default=DEFAULT_COMPANY, help="الشركة المراد استيرادها")
     parser.add_argument("--reference-date", default=DEFAULT_REFERENCE_DATE, help="تاريخ مرجع الكشف YYYY-MM-DD")
     parser.add_argument("--dry-run", action="store_true", help="فحص دون تعديل قاعدة البيانات")
+    parser.add_argument(
+        "--copy-from-sqlite",
+        default="",
+        help="نسخ كشف الموظفين كاملاً من قاعدة SQLite محلية إلى قاعدة الهدف (DATABASE_URL)",
+    )
     args = parser.parse_args()
+
+    if args.copy_from_sqlite:
+        result = copy_from_sqlite(Path(args.copy_from_sqlite))
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except AttributeError:
+            pass
+        target = os.environ.get("DATABASE_URL", "").strip()
+        print("=" * 68)
+        print("نسخ كشف الموظفين إلى قاعدة الهدف")
+        print("=" * 68)
+        print(f"  المصدر : {args.copy_from_sqlite}")
+        print(f"  الهدف  : {'PostgreSQL من DATABASE_URL' if target else 'SQLite المحلية'}")
+        print(f"  الإجمالي: {result['total']} موظف")
+        print(f"  مضاف   : {result['inserted']}")
+        print(f"  محدّث  : {result['updated']}")
+        print("=" * 68)
+        return 0
 
     reference = date.fromisoformat(args.reference_date)
     source = find_source_file(args.file)

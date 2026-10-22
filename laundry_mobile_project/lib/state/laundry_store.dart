@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
@@ -91,6 +92,7 @@ class LaundryStore extends ChangeNotifier {
   Future<void> _init() async {
     await _restoreSession();
     await _restoreCache();
+    await _applySeedIfEmpty();
     await _loadBaseUrl();
     _api = LaundryApi(baseUrl: _baseUrl, token: _token);
     if (_token != null && currentUser != null) {
@@ -173,6 +175,18 @@ class LaundryStore extends ChangeNotifier {
       if (raw == null || raw.isEmpty) return;
       final data = jsonDecode(raw) as Map<String, dynamic>;
       _applySnapshot(data, persist: false);
+      _restored = true;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// يحمّل نسخة الكشف المدمجة في التطبيق عند أول تشغيل (قبل أي مزامنة).
+  Future<void> _applySeedIfEmpty() async {
+    if (employees.isNotEmpty || serviceItems.isNotEmpty) return;
+    try {
+      final raw = await rootBundle.loadString('assets/seed_roster.json');
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      _applySnapshot(data, persist: true, preservePending: true);
       _restored = true;
       notifyListeners();
     } catch (_) {}

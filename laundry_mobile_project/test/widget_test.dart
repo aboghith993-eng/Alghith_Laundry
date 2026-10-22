@@ -5,6 +5,7 @@ import 'package:laundry_mobile/models/laundry_models.dart';
 import 'package:laundry_mobile/state/laundry_store.dart';
 import 'package:laundry_mobile/utils/format.dart';
 import 'package:laundry_mobile/utils/shift.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('تنسيق المبالغ', () {
@@ -151,6 +152,18 @@ void main() {
       expect(LaundryStore.normalizeEmployeeCode('٢٠-٨٧١'), '20871');
       expect(LaundryStore.normalizeDigits('رقم ١٢'), 'رقم 12');
     });
+  });
+
+  test('يتوفر الكشف المدمج داخل التطبيق قبل أول مزامنة', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final store = LaundryStore();
+    for (var attempt = 0; attempt < 100 && store.employees.isEmpty; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(store.employees.length, greaterThan(700));
+    expect(store.serviceItems, isNotEmpty);
+    store.dispose();
   });
 
   testWidgets('شاشة الدخول تعرض عناصرها الأساسية', (tester) async {

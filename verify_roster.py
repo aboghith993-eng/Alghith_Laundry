@@ -125,14 +125,24 @@ def index_by_code(rows: list[dict[str, object]]) -> tuple[dict[str, dict[str, ob
 
 
 def cycle_signature(row: dict[str, object], days: int) -> dict[str, tuple[int, str]]:
-    from app import employee_cycle
-
+    """نفس حساب employee_cycle في app.py دون استيراد التطبيق."""
+    work_days = int(norm_value(row.get("work_days")) or 0)
+    rest_days = int(norm_value(row.get("rest_days")) or 0)
+    cycle_length = work_days + rest_days
     start = date.today()
     signature: dict[str, tuple[int, str]] = {}
+    anchor_raw = norm_value(row.get("cycle_anchor"))
+    try:
+        anchor = date.fromisoformat(anchor_raw) if anchor_raw else None
+    except ValueError:
+        anchor = None
     for offset in range(days + 1):
         target = start + timedelta(days=offset)
-        result = employee_cycle(row, target)
-        signature[target.isoformat()] = (int(result["day"]), str(result["label"]))
+        if cycle_length <= 0 or anchor is None:
+            signature[target.isoformat()] = (0, "")
+            continue
+        day = (target - anchor).days % cycle_length + 1
+        signature[target.isoformat()] = (day, "دوام" if day <= work_days else "راحة")
     return signature
 
 

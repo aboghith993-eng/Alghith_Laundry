@@ -23,6 +23,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/fonts/
+    - assets/seed_roster.json
   fonts:
     - family: IBMPlexSansArabic
       fonts:
