@@ -622,6 +622,87 @@ class LaundryStore extends ChangeNotifier {
     }
   }
 
+  Future<String?> updateUser({
+    required int userId,
+    required String username,
+    required String fullName,
+    required String role,
+    String? password,
+  }) async {
+    try {
+      await _api!.updateUser(userId, {
+        'username': username.trim(),
+        'full_name': fullName.trim(),
+        'role': role,
+        if (password != null && password.isNotEmpty) 'password': password,
+      });
+      await syncNow();
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'تعذّر تحديث بيانات الحساب: $e';
+    }
+  }
+
+  Future<String?> deleteUser(int userId) async {
+    try {
+      await _api!.deleteUser(userId);
+      await syncNow();
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'تعذّر حذف الحساب: $e';
+    }
+  }
+
+  // ---- البحث عن الموظف برقمه ----
+
+  static String normalizeEmployeeCode(String value) =>
+      value.trim().toUpperCase().replaceAll(RegExp(r'[\s\-]+'), '');
+
+  Employee? employeeByCode(String code) {
+    final normalized = normalizeEmployeeCode(code);
+    if (normalized.isEmpty) return null;
+    for (final employee in employees) {
+      if (normalizeEmployeeCode(employee.employeeCode) == normalized) return employee;
+    }
+    final numeric = int.tryParse(normalized);
+    if (numeric == null) return null;
+    Employee? unique;
+    for (final employee in employees) {
+      if (int.tryParse(normalizeEmployeeCode(employee.employeeCode)) == numeric) {
+        if (unique != null) return null;
+        unique = employee;
+      }
+    }
+    return unique;
+  }
+
+  Employee? generalEmployee() {
+    for (final employee in employees) {
+      if (employee.isGeneral) return employee;
+    }
+    return null;
+  }
+
+  /// يبحث برقم الموظف محلياً ثم على الخادم (عند توفّر الاتصال).
+  Future<Employee?> findEmployeeByCode(String code) async {
+    final local = employeeByCode(code);
+    if (local != null) return local;
+    final normalized = normalizeEmployeeCode(code);
+    if (normalized.isEmpty || _api == null) return null;
+    try {
+      final rows = await _api!.fetchEmployees(search: code.trim());
+      for (final json in rows) {
+        final employee = Employee.fromJson(json);
+        if (normalizeEmployeeCode(employee.employeeCode) == normalized) return employee;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // ---- الإعدادات ----
 
   Future<String?> saveSettings({required String companyName, required String currency}) async {

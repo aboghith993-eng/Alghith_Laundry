@@ -187,6 +187,14 @@ class LaundryApi {
     await _request('POST', '/api/users/$userId/toggle');
   }
 
+  Future<void> updateUser(int userId, Map<String, dynamic> body) async {
+    await _request('PUT', '/api/users/$userId', body: body);
+  }
+
+  Future<void> deleteUser(int userId) async {
+    await _request('DELETE', '/api/users/$userId');
+  }
+
   Future<Map<String, String>> fetchSettings() async {
     final data = await _request('GET', '/api/settings');
     final raw = (data['settings'] as Map?) ?? const {};

@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +9,7 @@ import 'package:laundry_mobile/state/laundry_store.dart';
 
 const _python = String.fromEnvironment('LAUNDRY_PYTHON');
 const _serverRoot = String.fromEnvironment('LAUNDRY_SERVER_ROOT');
+const _integrationEnabled = bool.fromEnvironment('LAUNDRY_INTEGRATION_TESTS');
 
 int _port = 5601;
 late Directory _tempDir;
@@ -107,7 +108,7 @@ void main() {
     );
     expect(uploaded.items, isNotEmpty);
     expect(uploaded.subtotal, closeTo(service.rate * 2, 0.001));
-  }, timeout: const Timeout(Duration(minutes: 3)));
+  }, timeout: const Timeout(Duration(minutes: 3)), skip: !_integrationEnabled);
 
   test('الصلاحيات تتبع الدور', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{});

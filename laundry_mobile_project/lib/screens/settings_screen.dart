@@ -14,7 +14,9 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _companyName;
   late final TextEditingController _currency;
+  late final TextEditingController _serverUrl;
   bool _saving = false;
+  bool _connecting = false;
 
   @override
   void initState() {
@@ -22,13 +24,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final store = StoreScope.read(context);
     _companyName = TextEditingController(text: store.companyName);
     _currency = TextEditingController(text: store.currency);
+    _serverUrl = TextEditingController(text: store.baseUrl);
   }
 
   @override
   void dispose() {
     _companyName.dispose();
     _currency.dispose();
+    _serverUrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _connectServer() async {
+    final store = StoreScope.read(context);
+    setState(() => _connecting = true);
+    await store.setBaseUrl(_serverUrl.text);
+    if (!mounted) return;
+    setState(() => _connecting = false);
+    if (store.isOnline) {
+      showSuccess(context, 'تم الاتصال بالخادم بنجاح.');
+    } else {
+      showError(context, store.lastSyncError ?? 'تعذّر الاتصال بالخادم على العنوان الجديد.');
+    }
   }
 
   Future<void> _save() async {
@@ -75,6 +92,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 14),
+          if (store.canManageSystem) ...<Widget>[
+            AppPanel(
+              title: 'اتصال الخادم',
+              subtitle: 'عنوان نشر النظام على Render. هذا الخيار ظاهر لمدير النظام فقط.',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  TextField(
+                    controller: _serverUrl,
+                    keyboardType: TextInputType.url,
+                    decoration: const InputDecoration(
+                      labelText: 'عنوان الخادم',
+                      prefixIcon: Icon(Icons.dns_outlined, size: 20),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: _connecting ? null : _connectServer,
+                    icon: const Icon(Icons.link_rounded, size: 18),
+                    label: Text(_connecting ? 'جارٍ الاتصال…' : 'حفظ العنوان واختبار الاتصال'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
           AppPanel(
             title: 'معلومات الخادم',
             child: Column(

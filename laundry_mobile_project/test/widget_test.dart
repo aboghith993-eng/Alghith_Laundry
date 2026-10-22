@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:laundry_mobile/models/laundry_models.dart';
+import 'package:laundry_mobile/state/laundry_store.dart';
 import 'package:laundry_mobile/utils/format.dart';
 import 'package:laundry_mobile/utils/shift.dart';
 
@@ -133,6 +134,15 @@ void main() {
       final restored = PendingOrder.fromJson(pending.toJson());
       expect(restored.clientUuid, 'lm-1');
       expect(restored.lines.first.quantity, 3);
+    });
+  });
+
+  group('رقم الموظف', () {
+    test('تطبيع الرقم للتطابق المباشر', () {
+      expect(LaundryStore.normalizeEmployeeCode(' 1001 '), '1001');
+      expect(LaundryStore.normalizeEmployeeCode('gen-001'), 'GEN001');
+      expect(LaundryStore.normalizeEmployeeCode('a 12-3'), 'A123');
+      expect(LaundryStore.normalizeEmployeeCode(''), '');
     });
   });
 

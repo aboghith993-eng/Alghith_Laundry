@@ -15,22 +15,13 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _username = TextEditingController();
   final TextEditingController _password = TextEditingController();
-  final TextEditingController _server = TextEditingController();
   bool _busy = false;
-  bool _showServer = false;
   String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _server.text = StoreScope.read(context).baseUrl;
-  }
 
   @override
   void dispose() {
     _username.dispose();
     _password.dispose();
-    _server.dispose();
     super.dispose();
   }
 
@@ -52,19 +43,6 @@ class _LoginScreenState extends State<LoginScreen> {
       _busy = false;
       _error = message;
     });
-  }
-
-  Future<void> _applyServer() async {
-    final store = StoreScope.read(context);
-    setState(() => _busy = true);
-    await store.setBaseUrl(_server.text.trim());
-    if (!mounted) return;
-    setState(() => _busy = false);
-    showAppSnack(
-      context,
-      store.isOnline ? 'تم الاتصال بالخادم بنجاح.' : 'تعذّر الاتصال بالخادم على العنوان الجديد.',
-      isError: !store.isOnline,
-    );
   }
 
   @override
@@ -126,23 +104,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         prefixIcon: Icon(Icons.lock_outline_rounded, size: 20, color: AppColors.muted),
                       ),
                     ),
-                    if (_showServer) ...<Widget>[
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _server,
-                        keyboardType: TextInputType.url,
-                        decoration: const InputDecoration(
-                          labelText: 'عنوان الخادم',
-                          prefixIcon: Icon(Icons.dns_outlined, size: 20, color: AppColors.muted),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      OutlinedButton.icon(
-                        onPressed: _busy ? null : _applyServer,
-                        icon: const Icon(Icons.link_rounded, size: 18),
-                        label: const Text('حفظ العنوان والاتصال'),
-                      ),
-                    ],
                     if (_error != null) ...<Widget>[
                       const SizedBox(height: 12),
                       Container(
@@ -168,12 +129,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.white),
                             )
                           : const Text('تسجيل الدخول'),
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton.icon(
-                      onPressed: () => setState(() => _showServer = !_showServer),
-                      icon: const Icon(Icons.settings_ethernet_rounded, size: 18),
-                      label: Text(_showServer ? 'إخفاء إعدادات الخادم' : 'إعدادات الخادم'),
                     ),
                   ],
                 ),

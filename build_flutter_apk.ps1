@@ -1,4 +1,4 @@
-# بناء تطبيق الجوال (Flutter) — APK + Web
+﻿# بناء تطبيق الجوال (Flutter) — APK + Web
 # الاستخدام:  powershell -ExecutionPolicy Bypass -File .\build_flutter_apk.ps1
 # الخيارات:   .\build_flutter_apk.ps1 -SkipTests
 #             .\build_flutter_apk.ps1 -ApiUrl "https://your-server.onrender.com"

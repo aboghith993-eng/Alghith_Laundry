@@ -1,3 +1,5 @@
+﻿import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/laundry_models.dart';
@@ -28,6 +30,7 @@ class OrderFormScreen extends StatefulWidget {
 }
 
 class _OrderFormScreenState extends State<OrderFormScreen> {
+  final TextEditingController _code = TextEditingController();
   final TextEditingController _personName = TextEditingController();
   final TextEditingController _notes = TextEditingController();
   final TextEditingController _quantity = TextEditingController(text: '1');
@@ -36,8 +39,14 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
   DateTime _serviceDate = DateTime.now();
   final List<_OrderLine> _lines = <_OrderLine>[_OrderLine()];
   bool _saving = false;
+  bool _looking = false;
+  String? _codeError;
+  Timer? _debounce;
+
   @override
   void dispose() {
+    _debounce?.cancel();
+    _code.dispose();
     _personName.dispose();
     _notes.dispose();
     _quantity.dispose();
@@ -66,19 +75,59 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
     return total;
   }
 
-  Future<void> _pickEmployee() async {
+  void _onCodeChanged(String value) {
+    _debounce?.cancel();
+    final code = value.trim();
+    if (code.isEmpty) {
+      setState(() {
+        _employee = null;
+        _codeError = null;
+        _looking = false;
+      });
+      return;
+    }
     final store = StoreScope.read(context);
-    final picked = await showModalBottomSheet<Employee>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.bg,
-      builder: (_) => _EmployeePickerSheet(employees: store.employees),
-    );
-    if (picked == null) return;
+    final local = store.employeeByCode(code);
+    if (local != null) {
+      setState(() {
+        _employee = local;
+        _codeError = null;
+        _looking = false;
+      });
+      return;
+    }
     setState(() {
-      _employee = picked;
+      _employee = null;
+      _codeError = null;
+      _looking = true;
+    });
+    _debounce = Timer(const Duration(milliseconds: 400), () => _lookupCode(code));
+  }
+
+  Future<void> _lookupCode(String code) async {
+    final store = StoreScope.read(context);
+    final employee = await store.findEmployeeByCode(code);
+    if (!mounted) return;
+    if (_code.text.trim() != code) return;
+    setState(() {
+      _looking = false;
+      _employee = employee;
+      _codeError = employee == null ? 'لا يوجد موظف بهذا الرقم.' : null;
+    });
+  }
+
+  void _useGeneralRecord() {
+    final store = StoreScope.read(context);
+    final general = store.generalEmployee();
+    if (general == null) return;
+    setState(() {
+      _code.text = general.employeeCode;
+      _employee = general;
+      _codeError = null;
+      _looking = false;
       _personName.clear();
     });
+    FocusScope.of(context).unfocus();
   }
 
   Future<void> _pickService(int index) async {
@@ -96,9 +145,19 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
 
   Future<void> _save() async {
     final store = StoreScope.read(context);
-    if (_employee == null) {
-      showError(context, 'اختر الموظف أو المستفيد أولاً.');
-      return;
+    var employee = _employee;
+    if (employee == null) {
+      employee = await store.findEmployeeByCode(_code.text);
+      if (!mounted) return;
+      if (employee == null) {
+        setState(() => _codeError = 'لا يوجد موظف بهذا الرقم.');
+        showError(context, 'اكتب رقم موظف صحيح مسجّل في قاعدة البيانات.');
+        return;
+      }
+      setState(() {
+        _employee = employee;
+        _codeError = null;
+      });
     }
     final lines = <PendingOrderLine>[];
     for (final line in _lines) {
@@ -122,7 +181,7 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
     }
     setState(() => _saving = true);
     final result = await store.createOrder(
-      employeeId: _employee!.id,
+      employeeId: employee.id,
       serviceDate: formatIsoDate(_serviceDate),
       lines: lines,
       personName: _personName.text,
@@ -166,38 +225,88 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
           const PageHeading(
             eyebrow: 'إدخال معاملة جديدة',
             title: 'تسجيل طلب مغسلة',
-            subtitle: 'اختر الموظف وأضف جميع قطع الملابس والمفروشات في طلب واحد.',
+            subtitle: 'اكتب رقم الموظف ثم أضف جميع قطع الملابس والمفروشات في طلب واحد.',
           ),
           const SizedBox(height: 16),
           AppPanel(
             title: 'بيانات الموظف أو المستفيد',
-            subtitle: 'تأكد من اختيار السجل الصحيح قبل تسجيل الخدمات.',
+            subtitle: 'أدخل رقم الموظف وسيظهر اسمه تلقائياً من قاعدة البيانات.',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                InkWell(
-                  onTap: _pickEmployee,
-                  borderRadius: BorderRadius.circular(AppRadius.control),
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'الموظف / المستفيد *',
-                      suffixIcon: Icon(Icons.expand_more_rounded, color: AppColors.muted),
-                    ),
-                    child: Text(
-                      employee == null
-                          ? 'اختر من قاعدة البيانات'
-                          : '${employee.employeeCode} — ${employee.name}${employee.isGeneral ? ' (سجل عام)' : ''}',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: employee == null ? AppColors.muted : AppColors.ink,
-                        fontWeight: employee == null ? FontWeight.w400 : FontWeight.w600,
-                      ),
-                    ),
+                TextField(
+                  controller: _code,
+                  textInputAction: TextInputAction.done,
+                  onChanged: _onCodeChanged,
+                  decoration: InputDecoration(
+                    labelText: 'رقم الموظف *',
+                    hintText: 'اكتب رقم الموظف ليظهر اسمه مباشرة',
+                    prefixIcon: const Icon(Icons.badge_outlined, size: 20, color: AppColors.muted),
+                    suffixIcon: _looking
+                        ? const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : null,
+                    errorText: _codeError,
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
+                if (employee != null)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.mint,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.focus.withValues(alpha: .45)),
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        const Icon(Icons.person_pin_circle_rounded, size: 22, color: AppColors.greenDark),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(
+                                employee.name,
+                                style: const TextStyle(
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.greenDark,
+                                ),
+                              ),
+                              Text(
+                                '${employee.employeeCode}'
+                                '${employee.company.isEmpty ? '' : ' • ${employee.company}'}'
+                                '${employee.department.isEmpty ? '' : ' • ${employee.department}'}',
+                                style: const TextStyle(fontSize: 12, color: AppColors.muted),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (employee.isGeneral)
+                          const StatusPill(status: 'pending', label: 'سجل عام')
+                        else if (!employee.active)
+                          const StatusPill(status: 'rejected', label: 'معطّل'),
+                      ],
+                    ),
+                  ),
+                if (store.generalEmployee() != null)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton.icon(
+                      onPressed: _useGeneralRecord,
+                      icon: const Icon(Icons.person_outline_rounded, size: 18),
+                      label: const Text('سجل الزائر العام'),
+                    ),
+                  ),
                 const Text(
-                  'لضيوف خارج الشركة اختر «موظف عام» واكتب اسم الشخص.',
+                  'لضيوف خارج الشركة اضغط «سجل الزائر العام» ثم اكتب اسم الشخص.',
                   style: TextStyle(fontSize: 12, color: AppColors.muted),
                 ),
                 const SizedBox(height: 14),
@@ -444,116 +553,6 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
   String currencyLabel(BuildContext context) {
     final store = StoreScope.read(context);
     return store.currency;
-  }
-}
-
-/// اختيار الموظف من قاعدة البيانات مع بحث فوري.
-class _EmployeePickerSheet extends StatefulWidget {
-  const _EmployeePickerSheet({required this.employees});
-
-  final List<Employee> employees;
-
-  @override
-  State<_EmployeePickerSheet> createState() => _EmployeePickerSheetState();
-}
-
-class _EmployeePickerSheetState extends State<_EmployeePickerSheet> {
-  final TextEditingController _controller = TextEditingController();
-  String _query = '';
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final query = _query.trim().toLowerCase();
-    final list = widget.employees.where((employee) {
-      if (query.isEmpty) return true;
-      return '${employee.employeeCode} ${employee.name} ${employee.company} ${employee.department}'
-          .toLowerCase()
-          .contains(query);
-    }).toList();
-
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: .85,
-      builder: (context, controller) => Column(
-        children: <Widget>[
-          const SizedBox(height: 10),
-          Container(
-            width: 44,
-            height: 4,
-            decoration: BoxDecoration(color: AppColors.line, borderRadius: BorderRadius.circular(999)),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Text('اختر الموظف أو المستفيد', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 10),
-                SearchField(
-                  controller: _controller,
-                  hint: 'ابحث برقم الموظف أو الاسم',
-                  onChanged: (value) => setState(() => _query = value),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: list.isEmpty
-                ? const EmptyState(icon: '♙', title: 'لا توجد نتائج مطابقة')
-                : ListView.builder(
-                    controller: controller,
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                    itemCount: list.length,
-                    itemBuilder: (context, index) {
-                      final employee = list[index];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: AppPanel(
-                          padding: const EdgeInsets.all(12),
-                          child: InkWell(
-                            onTap: () => Navigator.of(context).pop(employee),
-                            child: Row(
-                              children: <Widget>[
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: <Widget>[
-                                      Text(
-                                        '${employee.employeeCode} — ${employee.name}',
-                                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.ink),
-                                      ),
-                                      Text(
-                                        '${employee.company.isEmpty ? 'بدون شركة' : employee.company}'
-                                        '${employee.department.isEmpty ? '' : ' • ${employee.department}'}',
-                                        style: const TextStyle(fontSize: 12, color: AppColors.muted),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                if (employee.isGeneral)
-                                  const StatusPill(status: 'pending', label: 'سجل عام'),
-                                if (!employee.active)
-                                  const Padding(
-                                    padding: EdgeInsets.only(right: 6),
-                                    child: StatusPill(status: 'rejected', label: 'معطّل'),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

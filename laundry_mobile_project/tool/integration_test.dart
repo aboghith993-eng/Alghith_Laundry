@@ -186,6 +186,42 @@ Future<void> main() async {
     'password': 'Integration@123',
     'role': 'supervisor',
   });
+  await api.createUser(<String, dynamic>{
+    'username': 'it_edit_user',
+    'full_name': 'مستخدم للتعديل',
+    'password': 'Integration@123',
+    'role': 'contractor',
+  });
+  final editUser = (await api.fetchUsers()).firstWhere(
+    (u) => u['username'] == 'it_edit_user',
+  );
+  final editUserId = (editUser['id'] as num).toInt();
+  await api.updateUser(editUserId, <String, dynamic>{
+    'username': 'it_edit_user',
+    'full_name': 'مستخدم معدّل',
+    'role': 'supervisor',
+    'password': 'Integration@456',
+  });
+  final edited = (await api.fetchUsers()).firstWhere((u) => u['id'] == editUserId);
+  check(
+    'user updated',
+    edited['full_name'] == 'مستخدم معدّل' && edited['role'] == 'supervisor',
+    '${edited['full_name']}/${edited['role']}',
+  );
+  final editedLogin = await api.login('it_edit_user', 'Integration@456');
+  check('user new password works', (editedLogin['access_token'] as String).isNotEmpty);
+  final adminRow = (await api.fetchUsers()).firstWhere((u) => u['username'] == 'admin');
+  final adminId = (adminRow['id'] as num).toInt();
+  var selfDeleteBlocked = false;
+  try {
+    await api.deleteUser(adminId);
+  } on ApiException catch (e) {
+    selfDeleteBlocked = e.statusCode == 400;
+  }
+  check('self delete blocked', selfDeleteBlocked);
+  await api.deleteUser(editUserId);
+  final afterDelete = await api.fetchUsers();
+  check('user deleted', afterDelete.every((u) => u['id'] != editUserId));
   final settings = await api.fetchSettings();
   check('settings currency', (settings['currency'] ?? '').isNotEmpty, '$settings');
   await api.saveSettings('مغسلة الشركة', 'ريال يمني');

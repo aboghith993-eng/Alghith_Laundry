@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/laundry_models.dart';
+import '../state/laundry_store.dart';
 import '../state/store_scope.dart';
 import '../widgets/app_widgets.dart';
 
@@ -106,8 +107,18 @@ class _UserCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Row(
+          Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            alignment: WrapAlignment.end,
             children: <Widget>[
+              TextButton.icon(
+                onPressed: () => Navigator.of(context).push<bool>(
+                  MaterialPageRoute<bool>(builder: (_) => _UserFormScreen(user: user)),
+                ),
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('تعديل'),
+              ),
               TextButton.icon(
                 onPressed: () => Navigator.of(context).push<bool>(
                   MaterialPageRoute<bool>(builder: (_) => _ResetPasswordScreen(user: user)),
@@ -115,7 +126,6 @@ class _UserCard extends StatelessWidget {
                 icon: const Icon(Icons.key_rounded, size: 16),
                 label: const Text('كلمة المرور'),
               ),
-              const Spacer(),
               if (!isCurrent)
                 TextButton.icon(
                   onPressed: () async {
@@ -134,16 +144,53 @@ class _UserCard extends StatelessWidget {
                   ),
                   label: Text(user.active ? 'تعطيل' : 'تفعيل'),
                 ),
+              if (!isCurrent)
+                TextButton.icon(
+                  onPressed: () => _confirmDelete(context, store, user),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 17, color: AppColors.red),
+                  label: const Text('حذف', style: TextStyle(color: AppColors.red)),
+                ),
             ],
           ),
         ],
       ),
     );
   }
+
+  Future<void> _confirmDelete(BuildContext context, LaundryStore store, AppUser user) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('حذف الحساب'),
+        content: Text('هل تريد حذف حساب «${user.fullName}» (@${user.username})؟ لا يمكن التراجع عن هذا الإجراء.'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final message = await store.deleteUser(user.id);
+    if (!context.mounted) return;
+    if (message == null) {
+      showSuccess(context, 'تم حذف الحساب.');
+    } else {
+      showError(context, message);
+    }
+  }
 }
 
 class _UserFormScreen extends StatefulWidget {
-  const _UserFormScreen();
+  const _UserFormScreen({this.user});
+
+  final AppUser? user;
 
   @override
   State<_UserFormScreen> createState() => _UserFormScreenState();
@@ -156,6 +203,19 @@ class _UserFormScreenState extends State<_UserFormScreen> {
   String _role = 'contractor';
   bool _saving = false;
 
+  bool get _editing => widget.user != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = widget.user;
+    if (user != null) {
+      _username.text = user.username;
+      _fullName.text = user.fullName;
+      _role = user.role;
+    }
+  }
+
   @override
   void dispose() {
     _username.dispose();
@@ -167,16 +227,24 @@ class _UserFormScreenState extends State<_UserFormScreen> {
   Future<void> _save() async {
     final store = StoreScope.read(context);
     setState(() => _saving = true);
-    final message = await store.createUser(
-      username: _username.text,
-      fullName: _fullName.text,
-      password: _password.text,
-      role: _role,
-    );
+    final message = _editing
+        ? await store.updateUser(
+            userId: widget.user!.id,
+            username: _username.text,
+            fullName: _fullName.text,
+            role: _role,
+            password: _password.text,
+          )
+        : await store.createUser(
+            username: _username.text,
+            fullName: _fullName.text,
+            password: _password.text,
+            role: _role,
+          );
     if (!mounted) return;
     setState(() => _saving = false);
     if (message == null) {
-      showSuccess(context, 'تم إنشاء حساب المستخدم.');
+      showSuccess(context, _editing ? 'تم تحديث بيانات الحساب.' : 'تم إنشاء حساب المستخدم.');
       Navigator.of(context).pop(true);
     } else {
       showError(context, message);
@@ -187,7 +255,7 @@ class _UserFormScreenState extends State<_UserFormScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg,
-      appBar: AppBar(title: const Text('إنشاء حساب مستخدم')),
+      appBar: AppBar(title: Text(_editing ? 'تعديل حساب مستخدم' : 'إنشاء حساب مستخدم')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
         children: <Widget>[
@@ -208,7 +276,11 @@ class _UserFormScreenState extends State<_UserFormScreen> {
                 TextField(
                   controller: _password,
                   obscureText: true,
-                  decoration: const InputDecoration(labelText: 'كلمة المرور * (8 أحرف فأكثر)'),
+                  decoration: InputDecoration(
+                    labelText: _editing
+                        ? 'كلمة مرور جديدة (اتركها فارغة للإبقاء على الحالية)'
+                        : 'كلمة المرور * (8 أحرف فأكثر)',
+                  ),
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
@@ -236,7 +308,7 @@ class _UserFormScreenState extends State<_UserFormScreen> {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: FilledButton(
             onPressed: _saving ? null : _save,
-            child: const Text('إنشاء الحساب'),
+            child: Text(_editing ? 'حفظ التعديلات' : 'إنشاء الحساب'),
           ),
         ),
       ),

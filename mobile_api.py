@@ -1026,6 +1026,86 @@ def api_user_toggle(user_id: int) -> Any:
     return jsonify({"ok": True, "message": "تم تحديث حالة الحساب."})
 
 
+def _other_active_admins(user_id: int) -> int:
+    from app import get_db
+
+    row = get_db().execute(
+        "SELECT COUNT(*) AS total FROM users WHERE role='admin' AND active=1 AND id<>?",
+        (user_id,),
+    ).fetchone()
+    return int(row["total"] or 0) if row else 0
+
+
+@bp.route("/api/users/<int:user_id>", methods=["PUT", "POST"])
+@api_roles_required("admin")
+def api_user_update(user_id: int) -> Any:
+    from app import get_db
+
+    db = get_db()
+    row = db.execute(
+        "SELECT id,username,full_name,role FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    if not row:
+        return _json_error("الحساب غير موجود.", 404)
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username", row["username"])).strip()
+    full_name = str(payload.get("full_name", row["full_name"])).strip()
+    role = str(payload.get("role", row["role"])).strip()
+    password = str(payload.get("password", "") or "")
+    if role not in ROLES:
+        return _json_error("الدور غير صالح.", 400)
+    if len(username) < 3 or not full_name:
+        return _json_error("اسم المستخدم 3 أحرف على الأقل، والاسم مطلوب.", 400)
+    if password and len(password) < 8:
+        return _json_error("كلمة المرور يجب ألا تقل عن 8 أحرف.", 400)
+    if g.api_user["id"] == user_id and role != "admin":
+        return _json_error("لا يمكن تغيير دور الحساب المستخدم حالياً.", 400)
+    if row["role"] == "admin" and role != "admin" and _other_active_admins(user_id) == 0:
+        return _json_error("لا يمكن إزالة صلاحية آخر مدير نظام نشط.", 400)
+    try:
+        db.execute(
+            "UPDATE users SET username=?, full_name=?, role=? WHERE id=?",
+            (username, full_name, role, user_id),
+        )
+        if password:
+            db.execute(
+                "UPDATE users SET password_hash=? WHERE id=?",
+                (generate_password_hash(password), user_id),
+            )
+        db.commit()
+    except (sqlite3.IntegrityError, psycopg.IntegrityError):
+        db.rollback()
+        return _json_error("اسم المستخدم موجود مسبقاً.", 400)
+    return jsonify({"ok": True, "message": "تم تحديث بيانات الحساب."})
+
+
+@bp.route("/api/users/<int:user_id>", methods=["DELETE"])
+@api_roles_required("admin")
+def api_user_delete(user_id: int) -> Any:
+    from app import get_db
+
+    db = get_db()
+    if g.api_user["id"] == user_id:
+        return _json_error("لا يمكن حذف الحساب المستخدم حالياً.", 400)
+    row = db.execute("SELECT id,full_name,role FROM users WHERE id=?", (user_id,)).fetchone()
+    if not row:
+        return _json_error("الحساب غير موجود.", 404)
+    if row["role"] == "admin" and _other_active_admins(user_id) == 0:
+        return _json_error("لا يمكن حذف آخر مدير نظام نشط.", 400)
+    linked = db.execute(
+        "SELECT COUNT(*) AS total FROM laundry_orders "
+        "WHERE created_by=? OR delivered_by=? OR confirmed_by=?",
+        (user_id, user_id, user_id),
+    ).fetchone()
+    if linked and int(linked["total"] or 0) > 0:
+        return _json_error(
+            "لا يمكن حذف الحساب لارتباطه بطلبات مسجّلة؛ عطّله بدلاً من ذلك.", 400
+        )
+    db.execute("DELETE FROM users WHERE id=?", (user_id,))
+    db.commit()
+    return jsonify({"ok": True, "message": "تم حذف الحساب."})
+
+
 # ---------------------------------------------------------------------------
 # الإعدادات
 # ---------------------------------------------------------------------------
