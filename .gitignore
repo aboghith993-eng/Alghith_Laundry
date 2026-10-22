@@ -21,3 +21,14 @@ mobile/android/app/src/main/assets/capacitor.config.json
 mobile/android/app/src/main/assets/capacitor.plugins.json
 # مفتاح التوقيع: لا يُرفع إلى GitHub — احتفظ بنسخة آمنة منه خارج المستودع.
 *.keystore
+
+# تطبيق الجوال (Flutter)
+laundry_mobile_project/build/
+laundry_mobile_project/.dart_tool/
+laundry_mobile_project/.flutter-plugins-dependencies
+laundry_mobile_project/android/.gradle/
+laundry_mobile_project/android/local.properties
+laundry_mobile_project/android/app/src/main/assets/flutter_assets/
+laundry_mobile_project/.idea/
+laundry_mobile_project/*.iml
+
