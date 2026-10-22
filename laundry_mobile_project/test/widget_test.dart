@@ -144,6 +144,13 @@ void main() {
       expect(LaundryStore.normalizeEmployeeCode('a 12-3'), 'A123');
       expect(LaundryStore.normalizeEmployeeCode(''), '');
     });
+
+    test('تحويل الأرقام العربية والفارسية إلى لاتينية', () {
+      expect(LaundryStore.normalizeEmployeeCode('٢٠٨٧١'), '20871');
+      expect(LaundryStore.normalizeEmployeeCode('۲۰۸۷۱'), '20871');
+      expect(LaundryStore.normalizeEmployeeCode('٢٠-٨٧١'), '20871');
+      expect(LaundryStore.normalizeDigits('رقم ١٢'), 'رقم 12');
+    });
   });
 
   testWidgets('شاشة الدخول تعرض عناصرها الأساسية', (tester) async {

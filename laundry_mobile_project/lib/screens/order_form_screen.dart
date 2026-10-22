@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/laundry_models.dart';
+import '../state/laundry_store.dart';
 import '../state/store_scope.dart';
 import '../utils/format.dart';
 import '../utils/shift.dart';
@@ -41,6 +42,7 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
   bool _saving = false;
   bool _looking = false;
   String? _codeError;
+  List<Employee> _suggestions = const <Employee>[];
   Timer? _debounce;
 
   @override
@@ -77,12 +79,20 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
 
   void _onCodeChanged(String value) {
     _debounce?.cancel();
-    final code = value.trim();
+    final digits = LaundryStore.normalizeDigits(value);
+    if (digits != value) {
+      _code.value = TextEditingValue(
+        text: digits,
+        selection: TextSelection.collapsed(offset: digits.length),
+      );
+    }
+    final code = digits.trim();
     if (code.isEmpty) {
       setState(() {
         _employee = null;
         _codeError = null;
         _looking = false;
+        _suggestions = const <Employee>[];
       });
       return;
     }
@@ -93,6 +103,7 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
         _employee = local;
         _codeError = null;
         _looking = false;
+        _suggestions = const <Employee>[];
       });
       return;
     }
@@ -100,6 +111,7 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
       _employee = null;
       _codeError = null;
       _looking = true;
+      _suggestions = const <Employee>[];
     });
     _debounce = Timer(const Duration(milliseconds: 400), () => _lookupCode(code));
   }
@@ -109,11 +121,57 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
     final employee = await store.findEmployeeByCode(code);
     if (!mounted) return;
     if (_code.text.trim() != code) return;
+    if (employee != null) {
+      setState(() {
+        _looking = false;
+        _employee = employee;
+        _codeError = null;
+        _suggestions = const <Employee>[];
+      });
+      return;
+    }
+    final suggestions = store.suggestEmployees(code);
     setState(() {
       _looking = false;
-      _employee = employee;
-      _codeError = employee == null ? 'لا يوجد موظف بهذا الرقم.' : null;
+      _employee = null;
+      _suggestions = suggestions;
+      _codeError = store.employees.isEmpty
+          ? 'قائمة الموظفين غير محمّلة بعد. تحقّق من الاتصال ثم أعد المزامنة.'
+          : 'لا يوجد موظف بهذا الرقم.';
     });
+  }
+
+  Future<void> _retryEmployees() async {
+    final store = StoreScope.read(context);
+    setState(() => _looking = true);
+    await store.syncNow();
+    if (!mounted) return;
+    final code = _code.text.trim();
+    if (code.isEmpty) {
+      setState(() {
+        _looking = false;
+        _codeError = store.employees.isEmpty
+            ? 'تعذّر تحميل قائمة الموظفين. تحقّق من الاتصال بالخادم.'
+            : null;
+      });
+      return;
+    }
+    await _lookupCode(code);
+  }
+
+  void _applySuggestion(Employee employee) {
+    _debounce?.cancel();
+    _code.value = TextEditingValue(
+      text: employee.employeeCode,
+      selection: TextSelection.collapsed(offset: employee.employeeCode.length),
+    );
+    setState(() {
+      _employee = employee;
+      _codeError = null;
+      _looking = false;
+      _suggestions = const <Employee>[];
+    });
+    FocusScope.of(context).unfocus();
   }
 
   void _useGeneralRecord() {
@@ -256,6 +314,38 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
+                if (_suggestions.isNotEmpty) ...<Widget>[
+                  const Text(
+                    'هل تقصد:',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.muted),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: _suggestions
+                        .map(
+                          (employee) => ActionChip(
+                            label: Text(
+                              '${employee.employeeCode} — ${employee.name}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            onPressed: () => _applySuggestion(employee),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (_codeError != null && _code.text.trim().isNotEmpty)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton.icon(
+                      onPressed: _looking ? null : _retryEmployees,
+                      icon: const Icon(Icons.sync_rounded, size: 18),
+                      label: const Text('إعادة تحميل قائمة الموظفين'),
+                    ),
+                  ),
                 if (employee != null)
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -309,6 +399,14 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
                   'لضيوف خارج الشركة اضغط «سجل الزائر العام» ثم اكتب اسم الشخص.',
                   style: TextStyle(fontSize: 12, color: AppColors.muted),
                 ),
+                if (store.employees.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text(
+                      'لم يتم تحميل أي موظف من الخادم — راجع اتصال الخادم ثم أعد المزامنة.',
+                      style: TextStyle(fontSize: 12, color: AppColors.red),
+                    ),
+                  ),
                 const SizedBox(height: 14),
                 InkWell(
                   onTap: () async {

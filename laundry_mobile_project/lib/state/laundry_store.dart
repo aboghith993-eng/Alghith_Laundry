@@ -659,8 +659,59 @@ class LaundryStore extends ChangeNotifier {
 
   // ---- البحث عن الموظف برقمه ----
 
+  /// يحوّل الأرقام العربية/الفارسية إلى أرقام لاتينية (لأن لوحة المفاتيح العربية تُدخل ٠١٢).
+  static String normalizeDigits(String value) {
+    const arabic = '٠١٢٣٤٥٦٧٨٩';
+    const persian = '۰۱۲۳۴۵۶۷۸۹';
+    final buffer = StringBuffer();
+    for (final rune in value.runes) {
+      final ch = String.fromCharCode(rune);
+      final arabicIndex = arabic.indexOf(ch);
+      if (arabicIndex >= 0) {
+        buffer.write(arabicIndex);
+        continue;
+      }
+      final persianIndex = persian.indexOf(ch);
+      if (persianIndex >= 0) {
+        buffer.write(persianIndex);
+        continue;
+      }
+      buffer.write(ch);
+    }
+    return buffer.toString();
+  }
+
   static String normalizeEmployeeCode(String value) =>
-      value.trim().toUpperCase().replaceAll(RegExp(r'[\s\-]+'), '');
+      normalizeDigits(value).trim().toUpperCase().replaceAll(RegExp(r'[\s\-]+'), '');
+
+  /// اقتراحات لأرقام أو أسماء قريبة من الإدخال (للمساعدة عند الخطأ).
+  List<Employee> suggestEmployees(String query, {int limit = 5}) {
+    final raw = normalizeDigits(query).trim().toUpperCase();
+    if (raw.isEmpty) return const <Employee>[];
+    final normalized = normalizeEmployeeCode(raw);
+    final matches = <MapEntry<int, Employee>>[];
+    for (final employee in employees) {
+      final code = normalizeEmployeeCode(employee.employeeCode);
+      final name = employee.name.toUpperCase();
+      var score = 9;
+      if (code == normalized) {
+        score = 0;
+      } else if (name.contains(raw) && raw.length >= 2) {
+        score = 1;
+      } else if (normalized.isNotEmpty && code.startsWith(normalized)) {
+        score = 2;
+      } else if (normalized.isNotEmpty && code.contains(normalized)) {
+        score = 3;
+      }
+      if (score < 9) matches.add(MapEntry(score, employee));
+    }
+    matches.sort((a, b) {
+      final byScore = a.key.compareTo(b.key);
+      if (byScore != 0) return byScore;
+      return a.value.employeeCode.compareTo(b.value.employeeCode);
+    });
+    return matches.take(limit).map((entry) => entry.value).toList();
+  }
 
   Employee? employeeByCode(String code) {
     final normalized = normalizeEmployeeCode(code);
@@ -694,7 +745,7 @@ class LaundryStore extends ChangeNotifier {
     final normalized = normalizeEmployeeCode(code);
     if (normalized.isEmpty || _api == null) return null;
     try {
-      final rows = await _api!.fetchEmployees(search: code.trim());
+      final rows = await _api!.fetchEmployees(search: normalizeDigits(code).trim());
       for (final json in rows) {
         final employee = Employee.fromJson(json);
         if (normalizeEmployeeCode(employee.employeeCode) == normalized) return employee;
