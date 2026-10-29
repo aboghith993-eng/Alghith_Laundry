@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../state/store_scope.dart';
 import '../widgets/app_widgets.dart';
@@ -199,3 +199,4 @@ class _MenuTile extends StatelessWidget {
     );
   }
 }
+

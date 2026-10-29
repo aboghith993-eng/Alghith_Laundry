@@ -32,3 +32,13 @@ laundry_mobile_project/android/app/src/main/assets/flutter_assets/
 laundry_mobile_project/.idea/
 laundry_mobile_project/*.iml
 
+# نسخ عمل مؤقتة من قوالب الويب داخل مجلد الجوال
+mobile/www/web/
+mobile/www/web-template/
+mobile/www/web-clone/
+
+# ملفات تجريبية غير مستخدمة في تطبيق الجوال القديم
+mobile/www/js/main.js
+mobile/www/js/native-web.js
+mobile/www/js/web-app.js
+mobile/www/js/core/

@@ -19,6 +19,8 @@ class AppColors {
   static const Color red = Color(0xFFA63C3C);
   static const Color blue = Color(0xFF2B6497);
   static const Color focus = Color(0xFF8CCEBA);
+  static const Color panel = Color(0xFFFFFFFF);
+  static const Color border = Color(0xFFE1E9E5);
 
   static const LinearGradient brand = LinearGradient(
     begin: Alignment.topRight,

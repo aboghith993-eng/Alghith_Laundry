@@ -61,6 +61,7 @@ class LaundryStore extends ChangeNotifier {
   final List<AppUser> users = <AppUser>[];
   final List<LaundryOrder> orders = <LaundryOrder>[];
   final List<PendingOrder> pendingOrders = <PendingOrder>[];
+  final List<Company> companies = <Company>[];
   final Map<String, String> settings = <String, String>{};
 
   bool _restored = false;
@@ -70,6 +71,8 @@ class LaundryStore extends ChangeNotifier {
   String get companyName => settings['company_name'] ?? 'مغسلة الشركة';
 
   bool get hasPendingUploads => pendingOrders.isNotEmpty;
+
+  bool get isSuperAdmin => currentUser?.isSuperAdmin ?? false;
 
   /// الصلاحيات مشتقة من الدور المسجّل في الخادم.
   bool get canCreateOrder => currentUser?.canCreateOrder ?? false;
@@ -246,12 +249,13 @@ class LaundryStore extends ChangeNotifier {
 
   void _startSyncTimer() {
     _syncTimer?.cancel();
+    if (isSuperAdmin) return;
     _syncTimer = Timer.periodic(AppConfig.syncInterval, (_) => syncNow());
   }
 
   /// مزامنة كاملة: رفع الطلبات المعلّقة ثم جلب اللقطة من الخادم.
   Future<void> syncNow() async {
-    if (_syncInFlight || _api == null || currentUser == null) return;
+    if (_syncInFlight || _api == null || currentUser == null || isSuperAdmin) return;
     _syncInFlight = true;
     _syncing = true;
     notifyListeners();
@@ -458,10 +462,20 @@ class LaundryStore extends ChangeNotifier {
     );
   }
 
-  /// تسجيل تسليم القطع النظيفة.
-  Future<String?> deliverOrder(int orderId) async {
+  /// تسجيل تسليم القطع النظيفة (يمكن أن يكون جزئياً ويُستكمل لاحقاً).
+  Future<String?> deliverOrder(
+    int orderId, {
+    String receiverKind = 'same_employee',
+    String receiverName = '',
+    List<Map<String, dynamic>>? pieces,
+  }) async {
     try {
-      await _api!.deliverOrder(orderId);
+      await _api!.deliverOrder(
+        orderId,
+        receiverKind: receiverKind,
+        receiverName: receiverName,
+        pieces: pieces,
+      );
       await syncNow();
       return null;
     } on ApiException catch (e) {
@@ -586,6 +600,18 @@ class LaundryStore extends ChangeNotifier {
       return e.message;
     } catch (e) {
       return 'تعذّر تحديث الحالة: $e';
+    }
+  }
+
+  Future<String?> deleteServiceItem(int itemId) async {
+    try {
+      await _api!.deleteServiceItem(itemId);
+      await syncNow();
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'تعذّر حذف الخدمة: $e';
     }
   }
 
@@ -793,6 +819,121 @@ class LaundryStore extends ChangeNotifier {
       return e.message;
     } catch (e) {
       return 'تعذّر تغيير كلمة المرور: $e';
+    }
+  }
+
+  // ---- تصدير التقارير ----
+
+  /// ينزّل تقرير PDF أو Excel من الخادم بالبايتات (يتطلب اتصالاً).
+  Future<Uint8List> exportReport({
+    required String format,
+    String from = '',
+    String to = '',
+    String status = 'all',
+    String search = '',
+    String fulfillment = 'all',
+  }) async {
+    final api = _api ??= LaundryApi(baseUrl: _baseUrl, token: _token);
+    if (isSuperAdmin) {
+      throw ApiException('حساب المدير العام لا يصدّر تقارير تشغيل.');
+    }
+    return api.downloadReport(
+      format: format,
+      from: from,
+      to: to,
+      status: status,
+      search: search,
+      fulfillment: fulfillment,
+    );
+  }
+
+  // ---- تقرير سكن الموظفين ----
+
+  /// يجلب تقرير غسيل سكن الموظفين للفترة المحددة (يتطلب اتصالاً).
+  Future<HousingReport> fetchHousingReport({
+    String from = '',
+    String to = '',
+    bool housingOnly = false,
+  }) async {
+    final api = _api ??= LaundryApi(baseUrl: _baseUrl, token: _token);
+    if (isSuperAdmin) {
+      throw ApiException('حساب المدير العام لا يصدّر تقارير تشغيل.');
+    }
+    return api.fetchHousingReport(from: from, to: to, housingOnly: housingOnly);
+  }
+
+  /// ينزّل تقرير سكن الموظفين PDF أو Excel.
+  Future<Uint8List> exportHousingReport({
+    required String format,
+    String from = '',
+    String to = '',
+    bool housingOnly = false,
+  }) async {
+    final api = _api ??= LaundryApi(baseUrl: _baseUrl, token: _token);
+    if (isSuperAdmin) {
+      throw ApiException('حساب المدير العام لا يصدّر تقارير تشغيل.');
+    }
+    return api.downloadHousingReport(
+      format: format,
+      from: from,
+      to: to,
+      housingOnly: housingOnly,
+    );
+  }
+
+  // ---- الشركات (المدير العام) ----
+
+  Future<String?> refreshCompanies() async {
+    try {
+      final api = _api ??= LaundryApi(baseUrl: _baseUrl, token: _token);
+      final rows = await api.fetchCompanies();
+      companies
+        ..clear()
+        ..addAll(rows.map(Company.fromJson));
+      notifyListeners();
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'تعذّر تحميل الشركات: $e';
+    }
+  }
+
+  Future<String?> createCompany({
+    required String code,
+    required String name,
+    String adminUsername = '',
+    String adminPassword = '',
+    String adminName = '',
+  }) async {
+    try {
+      final api = _api ??= LaundryApi(baseUrl: _baseUrl, token: _token);
+      await api.createCompany(
+        code: code,
+        name: name,
+        adminUsername: adminUsername,
+        adminPassword: adminPassword,
+        adminName: adminName,
+      );
+      await refreshCompanies();
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'تعذّر إنشاء الشركة: $e';
+    }
+  }
+
+  Future<String?> toggleCompany(int companyId) async {
+    try {
+      final api = _api ??= LaundryApi(baseUrl: _baseUrl, token: _token);
+      await api.toggleCompany(companyId);
+      await refreshCompanies();
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'تعذّر تحديث حالة الشركة: $e';
     }
   }
 

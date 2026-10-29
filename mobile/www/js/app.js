@@ -7,7 +7,7 @@ import {
   getQueue, pendingCount, getLocalOrders, saveLocalOrder, getOrderByUuid, searchEmployee,
   findEmployeesByName, serviceItems, settings, uuid, autoSync, snapshotMeta,
   queueAction, syncActions, pendingActionCount, isLocked, setLocked, getIdentity,
-  fetchServerOrders,
+  fetchServerOrders, testServerConnection, hasServerUrl, BUILD_DEFAULT_SERVER,
 } from "./store.js";
 
 import { shiftWarnings, employeeCycle, todayIso, nowIso, formatDate } from "./shift.js";
@@ -235,37 +235,43 @@ VIEWS.settings = () => {
   const cfg = getConfig();
   const user = state.session || {};
   const snap = snapshotMeta();
+  const isAdmin = (user.role || "") === "admin";
   return `
     <div class="card">
-      <h3 class="card-title">حساب المستخدم</h3>
+      <h3 class="card-title">معلومات الحساب</h3>
       <p class="small">${esc(user.full_name || user.username || "-")} — ${esc(ROLE_LABELS[user.role] || user.role || "-")}</p>
     </div>
+    ${isAdmin ? `
     <div class="card">
-      <h3 class="card-title">عنوان الخادم</h3>
+      <h3 class="card-title">عنوان الخادم (خاص بالمدير)</h3>
       <label class="field">
-        <span>رابط الخادم</span>
-        <input type="url" id="cfg-server" value="${esc(cfg.server_url || "")}" placeholder="https://laundry-app.onrender.com" dir="ltr">
+        <span>عنوان الخادم</span>
+        <input type="text" id="cfg-server" value="${esc(cfg.server_url || BUILD_DEFAULT_SERVER || "")}" placeholder="https://alghith-laundry.onrender.com" dir="ltr" autocapitalize="off" autocorrect="off" spellcheck="false">
       </label>
-      <p class="small muted">اتركه فارغاً لاستخدام العنوان الحالي. عند النشر على Render ضع رابط التطبيق هنا.</p>
-      <button class="btn btn-accent btn-block" id="cfg-save">حفظ الإعدادات</button>
-    </div>
+      <p class="small muted">يُستخدم هذا العنوان للاتصال بـAPI. في حالة وجود رابط مدمج في التطبيق يمكن تركه فارغاً.</p>
+      <div class="row">
+        <button class="btn btn-ghost btn-sm" id="cfg-test">فحص الاتصال</button>
+        <button class="btn btn-accent btn-sm" id="cfg-save">حفظ عنوان الخادم</button>
+      </div>
+      <p class="small muted" id="cfg-server-status"></p>
+    </div>` : ""}
     <div class="card">
-      <h3 class="card-title">الرمز المحلي</h3>
-      <p class="small muted">اضبط رمزاًnumeric سريعاً لفتح التطبيق دون اتصال (يُحفظ مشفّراً على الجهاز فقط).</p>
+      <h3 class="card-title">رمز الدخول المحلي</h3>
+      <p class="small muted">ضع رمزاً رقمياً لفتح التطبيق دون اتصال بالإنترنت (بعد أول تسجيل دخول).</p>
       <label class="field">
-        <span>الرمز المحلي (4 أرقام على الأقل)</span>
+        <span>رمز الدخول المحلي (4 أرقام أو أكثر)</span>
         <input type="password" id="cfg-pin" inputmode="numeric" placeholder="••••">
       </label>
-      <button class="btn btn-ghost btn-block" id="cfg-pin-save">حفظ الرمز المحلي</button>
+      <button class="btn btn-ghost btn-block" id="cfg-pin-save">حفظ رمز الدخول المحلي</button>
     </div>
     <div class="card">
       <h3 class="card-title">المزامنة</h3>
-      <p class="small muted">${snap ? "آخر تحديث: " + esc(snap.built_at || "-") : "لم تُحمَّل نسخة محلية بعد."}</p>
-      <p class="small muted">طلبات في انتظار الإرسال: <strong>${pendingCount()}</strong></p>
+      <p class="small muted">${snap ? "آخر تحديث للبيانات: " + esc(snap.built_at || "-") : "لم يتم تحميل البيانات بعد."}</p>
+      <p class="small muted">طلبات بانتظار الإرسال: <strong>${pendingCount()}</strong></p>
       <button class="btn btn-primary btn-block" id="cfg-sync">مزامنة الآن</button>
     </div>
     <div class="card">
-      <button class="btn btn-danger btn-block" id="cfg-logout">تسجيل الخروج</button>
+      <button class="btn btn-danger btn-block" id="cfg-logout">قفل التطبيق / الخروج</button>
     </div>`;
 };
 

@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
+import '../models/laundry_models.dart';
 
 /// استثناء يحمل رسالة خطأ عربية قابلة للعرض للمستخدم.
 class ApiException implements Exception {
@@ -94,8 +96,17 @@ class LaundryApi {
     return (data as Map).cast<String, dynamic>();
   }
 
-  Future<void> deliverOrder(int orderId) async {
-    await _request('POST', '/api/orders/$orderId/deliver');
+  Future<void> deliverOrder(
+    int orderId, {
+    String receiverKind = 'same_employee',
+    String receiverName = '',
+    List<Map<String, dynamic>>? pieces,
+  }) async {
+    await _request('POST', '/api/orders/$orderId/deliver', body: <String, dynamic>{
+      'receiver_kind': receiverKind,
+      'receiver_name': receiverName,
+      if (pieces != null) 'pieces': pieces,
+    });
   }
 
   Future<void> confirmOrder(int orderId, String decision, {String reason = ''}) async {
@@ -153,21 +164,158 @@ class LaundryApi {
     await _request('POST', '/api/service-items/$itemId/toggle');
   }
 
+  Future<void> deleteServiceItem(int itemId) async {
+    await _request('DELETE', '/api/service-items/$itemId');
+  }
+
   Future<Map<String, dynamic>> fetchReports({
     String from = '',
     String to = '',
     String status = 'all',
     String search = '',
+    String fulfillment = 'all',
   }) async {
     final query = <String, String>{
       if (from.isNotEmpty) 'from': from,
       if (to.isNotEmpty) 'to': to,
       if (status.isNotEmpty) 'status': status,
       if (search.isNotEmpty) 'q': search,
+      if (fulfillment.isNotEmpty && fulfillment != 'all') 'fulfillment': fulfillment,
     };
     final suffix = query.isEmpty ? '' : '?${Uri(queryParameters: query).query}';
     final data = await _request('GET', '/api/reports$suffix');
     return (data as Map).cast<String, dynamic>();
+  }
+
+  /// تنزيل تقرير PDF أو Excel بالبايتات مع الفلاتر الحالية.
+  Future<Uint8List> downloadReport({
+    required String format,
+    String from = '',
+    String to = '',
+    String status = 'all',
+    String search = '',
+    String fulfillment = 'all',
+  }) async {
+    final query = <String, String>{
+      'format': format,
+      if (from.isNotEmpty) 'from': from,
+      if (to.isNotEmpty) 'to': to,
+      if (status.isNotEmpty && status != 'all') 'status': status,
+      if (search.isNotEmpty) 'q': search,
+      if (fulfillment.isNotEmpty && fulfillment != 'all') 'fulfillment': fulfillment,
+    };
+    final suffix = '?${Uri(queryParameters: query).query}';
+    final uri = Uri.parse('$baseUrl/api/reports/export$suffix');
+    final headers = <String, String>{
+      'Accept': '*/*',
+      if (token != null && token!.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+    try {
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 90));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        String message = 'تعذّر إنتاج ملف التقرير (رمز ${response.statusCode})';
+        try {
+          final decoded = jsonDecode(utf8.decode(response.bodyBytes, allowMalformed: true));
+          if (decoded is Map && decoded['error'] != null) {
+            message = decoded['error'].toString();
+          }
+        } catch (_) {}
+        throw ApiException(message, response.statusCode);
+      }
+      return response.bodyBytes;
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      throw ApiException('الخادم يستغرق وقتاً في إنتاج التقرير. أعد المحاولة.');
+    } catch (_) {
+      throw ApiException('تعذّر تنزيل التقرير — تحقق من الشبكة وعنوان الخادم');
+    }
+  }
+
+  /// تقرير غسيل سكن الموظفين لفترة محددة.
+  Future<HousingReport> fetchHousingReport({
+    String from = '',
+    String to = '',
+    bool housingOnly = false,
+  }) async {
+    final query = <String, String>{
+      if (from.isNotEmpty) 'from': from,
+      if (to.isNotEmpty) 'to': to,
+      if (housingOnly) 'housing': '1',
+    };
+    final suffix = query.isEmpty ? '' : '?${Uri(queryParameters: query).query}';
+    final data = await _request('GET', '/api/reports/housing$suffix');
+    return HousingReport.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// تنزيل تقرير سكن الموظفين PDF أو Excel.
+  Future<Uint8List> downloadHousingReport({
+    required String format,
+    String from = '',
+    String to = '',
+    bool housingOnly = false,
+  }) async {
+    final query = <String, String>{
+      'format': format,
+      if (from.isNotEmpty) 'from': from,
+      if (to.isNotEmpty) 'to': to,
+      if (housingOnly) 'housing': '1',
+    };
+    final suffix = '?${Uri(queryParameters: query).query}';
+    final uri = Uri.parse('$baseUrl/api/reports/housing/export$suffix');
+    final headers = <String, String>{
+      'Accept': '*/*',
+      if (token != null && token!.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+    try {
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 90));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        String message = 'تعذّر إنتاج ملف التقرير (رمز ${response.statusCode})';
+        try {
+          final decoded = jsonDecode(utf8.decode(response.bodyBytes, allowMalformed: true));
+          if (decoded is Map && decoded['error'] != null) {
+            message = decoded['error'].toString();
+          }
+        } catch (_) {}
+        throw ApiException(message, response.statusCode);
+      }
+      return response.bodyBytes;
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      throw ApiException('الخادم يستغرق وقتاً في إنتاج التقرير. أعد المحاولة.');
+    } catch (_) {
+      throw ApiException('تعذّر تنزيل التقرير — تحقق من الشبكة وعنوان الخادم');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchCompanies() async {
+    final data = await _request('GET', '/api/companies');
+    return _listOf(data, 'companies');
+  }
+
+  Future<void> createCompany({
+    required String code,
+    required String name,
+    String adminUsername = '',
+    String adminPassword = '',
+    String adminName = '',
+  }) async {
+    await _request('POST', '/api/companies', body: {
+      'code': code,
+      'name': name,
+      if (adminUsername.isNotEmpty) 'admin_username': adminUsername,
+      if (adminPassword.isNotEmpty) 'admin_password': adminPassword,
+      if (adminName.isNotEmpty) 'admin_name': adminName,
+    });
+  }
+
+  Future<void> toggleCompany(int companyId) async {
+    await _request('POST', '/api/companies/$companyId/toggle');
   }
 
   Future<List<Map<String, dynamic>>> fetchUsers() async {

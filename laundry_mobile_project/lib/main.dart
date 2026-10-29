@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'config/app_config.dart';
+import 'screens/companies_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_shell.dart';
 import 'state/laundry_store.dart';
@@ -65,11 +66,17 @@ class RootGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = StoreScope.of(context);
+    final Widget screen;
+    if (!store.isLoggedIn) {
+      screen = const LoginScreen(key: ValueKey<String>('login'));
+    } else if (store.isSuperAdmin) {
+      screen = const CompaniesScreen(key: ValueKey<String>('companies'));
+    } else {
+      screen = const MainShell(key: ValueKey<String>('shell'));
+    }
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 250),
-      child: store.isLoggedIn
-          ? const MainShell(key: ValueKey<String>('shell'))
-          : const LoginScreen(key: ValueKey<String>('login')),
+      child: screen,
     );
   }
 }

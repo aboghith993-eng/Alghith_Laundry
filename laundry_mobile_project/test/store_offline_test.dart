@@ -40,6 +40,25 @@ Future<void> _stopServer() async {
   await Future<void>.delayed(const Duration(milliseconds: 400));
 }
 
+/// ينتظر جاهزية الخادم قبل تسجيل الدخول (بدء Flask + تهيئة SQLite قد يتجاوز 300ms).
+Future<void> _waitForServer() async {
+  final client = HttpClient();
+  try {
+    for (var attempt = 0; attempt < 100; attempt++) {
+      try {
+        final request = await client.getUrl(Uri.parse('http://127.0.0.1:$_port/api/mobile/ping'));
+        final response = await request.close();
+        await response.drain<void>();
+        if (response.statusCode == 200) return;
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    throw StateError('لم يبدأ خادم الاختبار على المنفذ $_port');
+  } finally {
+    client.close(force: true);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -50,6 +69,7 @@ void main() {
     _tempDir = Directory.systemTemp.createTempSync('laundry_store_it_');
     final dbPath = '${_tempDir.path}/store.db';
     await _startServer(dbPath);
+    await _waitForServer();
     addTearDown(() async {
       await _stopServer();
       if (_tempDir.existsSync()) _tempDir.deleteSync(recursive: true);
@@ -97,6 +117,7 @@ void main() {
 
     // 2) أعد الخادم وشغّل المزامنة.
     await _startServer(dbPath);
+    await _waitForServer();
     await store.setBaseUrl('http://127.0.0.1:$_port');
     await store.syncNow();
 

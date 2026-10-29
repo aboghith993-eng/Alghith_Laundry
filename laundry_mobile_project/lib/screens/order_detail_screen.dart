@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/laundry_models.dart';
 import '../state/store_scope.dart';
 import '../utils/format.dart';
 import '../widgets/app_widgets.dart';
@@ -19,12 +20,29 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
   Future<void> _deliver() async {
     final store = StoreScope.read(context);
+    final order = store.orderById(widget.orderId);
+    if (order == null) return;
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => _DeliveryDialog(order: order),
+    );
+    if (result == null || !mounted) return;
     setState(() => _busy = true);
-    final message = await store.deliverOrder(widget.orderId);
+    final message = await store.deliverOrder(
+      widget.orderId,
+      receiverKind: result['receiver_kind'] as String? ?? 'same_employee',
+      receiverName: result['receiver_name'] as String? ?? '',
+      pieces: (result['pieces'] as List).cast<Map<String, dynamic>>(),
+    );
     if (!mounted) return;
     setState(() => _busy = false);
     if (message == null) {
-      showSuccess(context, 'تم تسجيل تسليم القطع النظيفة.');
+      showSuccess(
+        context,
+        order.isDelivered
+            ? 'تم استلام بقية الأصناف من المغسلة.'
+            : 'تم تسجيل استلام القطع النظيفة من المغسلة.',
+      );
     } else {
       showError(context, message);
     }
@@ -96,9 +114,10 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       );
     }
 
-    final canDeliver = store.canCreateOrder && order.isPending && !order.isDelivered;
+    final canDeliver = store.canCreateOrder && !order.isRejected && order.hasRemainingPieces;
     final canApprove = store.canApprove && order.isPending;
-    final canDelete = store.canManageSystem && order.isPending;
+    final isContractor = store.currentUser?.role == 'contractor';
+    final canDelete = store.canManageSystem || (isContractor && order.isPending);
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -152,6 +171,13 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 DetailRow(label: 'أنشئ بواسطة', value: order.creatorName.isEmpty ? '—' : order.creatorName),
                 if (order.delivererName.isNotEmpty)
                   DetailRow(label: 'سجّل التسليم', value: order.delivererName),
+                if (order.receiverName.isNotEmpty)
+                  DetailRow(
+                    label: order.receiverKind == 'other' ? 'مستلم آخر للأصناف' : 'مستلم الأصناف',
+                    value: order.receiverName,
+                  ),
+                if (order.receivedAt.isNotEmpty)
+                  DetailRow(label: 'وقت آخر استلام', value: order.receivedAt),
                 if (order.confirmerName.isNotEmpty)
                   DetailRow(label: 'راجع الطلب', value: order.confirmerName),
                 if (order.notes.isNotEmpty) DetailRow(label: 'ملاحظات', value: order.notes),
@@ -183,6 +209,17 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                                       '${formatQuantity(item.quantity)} ${item.unit} × ${formatMoney(item.unitPrice)}',
                                       style: const TextStyle(fontSize: 12, color: AppColors.muted),
                                     ),
+                                    if (item.receivedQuantity != null)
+                                      Text(
+                                        item.remaining > 0
+                                            ? 'مستلم ${formatQuantity(item.received)} · متبقٍ ${formatQuantity(item.remaining)}'
+                                            : 'تم استلام ${formatQuantity(item.received)}',
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w600,
+                                          color: item.remaining > 0 ? AppColors.amber : AppColors.green,
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
@@ -219,6 +256,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 message: 'لا تدخل هذه القيمة في المستحقات إلا بعد تسجيل تسليم القطع النظيفة ثم اعتماد الطلب من مشرف السكن.',
               ),
             ),
+          if (order.isPartiallyReceived)
+            Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: NoticeCard(
+                title: 'استلام جزئي',
+                message:
+                    'تم استلام جزء من القطع، وما زال متبقياً ${formatQuantity(order.remainingTotal)} قطعة. يمكنك استلام البقية لاحقاً من نفس الشاشة.',
+              ),
+            ),
         ],
       ),
       bottomNavigationBar: (canDeliver || canApprove)
@@ -243,7 +289,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                           icon: _busy
                               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.white))
                               : const Icon(Icons.local_shipping_outlined, size: 18),
-                          label: const Text('تسجيل التسليم'),
+                          label: Text(order.isDelivered ? 'استلام بقية الأصناف' : 'تسجيل التسليم'),
                         ),
                       ),
                   ],
@@ -251,6 +297,180 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               ),
             )
           : null,
+    );
+  }
+}
+
+/// حوار استلام الأصناف من المغسلة: المستلم + القطع والكميات (يدعم الاستلام الجزئي).
+class _DeliveryDialog extends StatefulWidget {
+  const _DeliveryDialog({required this.order});
+
+  final LaundryOrder order;
+
+  @override
+  State<_DeliveryDialog> createState() => _DeliveryDialogState();
+}
+
+class _DeliveryDialogState extends State<_DeliveryDialog> {
+  String _receiverKind = 'same_employee';
+  final TextEditingController _receiverName = TextEditingController();
+  final Map<int, TextEditingController> _quantities = <int, TextEditingController>{};
+  final Map<int, bool> _selected = <int, bool>{};
+  String? _error;
+
+  List<OrderItem> get _remainingItems =>
+      widget.order.items.where((item) => item.remaining > 0).toList();
+
+  @override
+  void initState() {
+    super.initState();
+    for (final item in _remainingItems) {
+      _selected[item.id] = true;
+      _quantities[item.id] = TextEditingController(text: _plain(item.remaining));
+    }
+  }
+
+  String _plain(double value) {
+    if (value == value.roundToDouble()) return value.toStringAsFixed(0);
+    return value.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  }
+
+  @override
+  void dispose() {
+    _receiverName.dispose();
+    for (final controller in _quantities.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  void _submit() {
+    final pieces = <Map<String, dynamic>>[];
+    for (final item in _remainingItems) {
+      if (_selected[item.id] != true) continue;
+      final raw = _quantities[item.id]?.text.trim() ?? '';
+      final quantity = double.tryParse(raw);
+      if (quantity == null || quantity <= 0) {
+        setState(() => _error = 'أدخل كمية صحيحة أكبر من صفر للصنف ${item.itemName}.');
+        return;
+      }
+      if (quantity > item.remaining + 1e-9) {
+        setState(() => _error =
+            'الكمية المستلمة للصنف ${item.itemName} أكبر من المتبقي (${_plain(item.remaining)}).');
+        return;
+      }
+      pieces.add(<String, dynamic>{'id': item.id, 'quantity': quantity});
+    }
+    if (pieces.isEmpty) {
+      setState(() => _error = 'حدّد قطعة واحدة على الأقل تم استلامها.');
+      return;
+    }
+    if (_receiverKind == 'other' && _receiverName.text.trim().isEmpty) {
+      setState(() => _error = 'اكتب اسم مستلم الأصناف.');
+      return;
+    }
+    Navigator.of(context).pop(<String, dynamic>{
+      'receiver_kind': _receiverKind,
+      'receiver_name': _receiverKind == 'other' ? _receiverName.text.trim() : '',
+      'pieces': pieces,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final remaining = _remainingItems;
+    return AlertDialog(
+      title: Text(widget.order.isDelivered ? 'استلام بقية الأصناف' : 'استلام الأصناف من المغسلة'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              const Text(
+                'من الذي استلم الأصناف؟',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.ink),
+              ),
+              RadioListTile<String>(
+                value: 'same_employee',
+                groupValue: _receiverKind,
+                onChanged: (value) => setState(() => _receiverKind = value ?? 'same_employee'),
+                title: const Text('نفس الموظف المسجل في الطلب', style: TextStyle(fontSize: 13)),
+                subtitle: Text(widget.order.displayName, style: const TextStyle(fontSize: 11.5)),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+              RadioListTile<String>(
+                value: 'other',
+                groupValue: _receiverKind,
+                onChanged: (value) => setState(() => _receiverKind = value ?? 'other'),
+                title: const Text('مستلم آخر (يُسجَّل اسمه)', style: TextStyle(fontSize: 13)),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+              if (_receiverKind == 'other')
+                TextField(
+                  controller: _receiverName,
+                  decoration: const InputDecoration(labelText: 'اسم المستلم *'),
+                ),
+              const Divider(height: 22),
+              const Text(
+                'القطع المستلمة الآن مع العدد',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.ink),
+              ),
+              const SizedBox(height: 4),
+              for (final item in remaining)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      CheckboxListTile(
+                        value: _selected[item.id] ?? false,
+                        onChanged: (value) => setState(() => _selected[item.id] = value ?? false),
+                        title: Text(item.itemName, style: const TextStyle(fontSize: 13)),
+                        subtitle: Text(
+                          'المتبقي ${_plain(item.remaining)} من ${formatQuantity(item.quantity)} ${item.unit}',
+                          style: const TextStyle(fontSize: 11.5, color: AppColors.muted),
+                        ),
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                      ),
+                      if (_selected[item.id] == true)
+                        TextField(
+                          controller: _quantities[item.id],
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'الكمية المستلمة',
+                            isDense: true,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              if (remaining.isEmpty)
+                const Text(
+                  'تم استلام جميع القطع مسبقاً.',
+                  style: TextStyle(fontSize: 12, color: AppColors.muted),
+                ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(fontSize: 12, color: AppColors.red, fontWeight: FontWeight.w600),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('إلغاء')),
+        FilledButton(onPressed: _submit, child: const Text('تأكيد الاستلام')),
+      ],
     );
   }
 }

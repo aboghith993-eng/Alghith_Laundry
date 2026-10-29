@@ -11,9 +11,8 @@ const KEY_ACTIONS = "ln_actions";
 const KEY_IDENTITY = "ln_identity";
 const KEY_LOCK = "ln_locked";
 
-/* عنوان الخادم المدمج في نسخة التطبيق — ضع رابط Render هنا قبل البناء ليُضبط تلقائياً.
-   يمكن تجاوزه من داخل التطبيق: الإعدادات ← عنوان الخادم. */
-export const BUILD_DEFAULT_SERVER = "";
+/* عنوان الخادم المدمج في نسخة التطبيق */
+export const BUILD_DEFAULT_SERVER = "https://alghith-laundry.onrender.com";
 
 export const state = {
   snapshot: null,
@@ -359,7 +358,14 @@ export function snapshotMeta() {
 }
 
 export async function syncSnapshotFromServer() {
-  const res = await apiRequest("/api/sync/snapshot");
+  const res = await apiRequest("/api/mobile/snapshot", { auth: true });
+  if (!res.ok) {
+    const alt = await apiRequest("/api/sync/snapshot", { auth: true });
+    if (alt.ok && alt.data && Array.isArray(alt.data.employees)) {
+      storeSnapshot(alt.data);
+      return { ok: true, built_at: alt.data.built_at, counts: alt.data.counts };
+    }
+  }
   if (res.ok && res.data && Array.isArray(res.data.employees)) {
     storeSnapshot(res.data);
     return { ok: true, built_at: res.data.built_at, counts: res.data.counts };

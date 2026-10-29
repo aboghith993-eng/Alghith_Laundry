@@ -152,7 +152,26 @@
 
   document.querySelectorAll('[data-confirm-delivery]').forEach(button => {
     button.addEventListener('click', event => {
-      if (!window.confirm('هل تؤكد أنك سلّمت الملابس أو المفروشات النظيفة للموظف؟')) event.preventDefault();
+      if (!window.confirm('هل تؤكد تسجيل استلام القطع النظيفة من المغسلة مع تحديد المستلم والكميات المستلمة؟')) event.preventDefault();
+    });
+  });
+  document.querySelectorAll('[data-deliver-form]').forEach(form => {
+    const otherInput = form.querySelector('[name="receiver_name"]');
+    const otherBox = otherInput?.closest('.receiver-other');
+    const radios = form.querySelectorAll('[name="receiver_kind"]');
+    const syncReceiver = () => {
+      const kind = form.querySelector('[name="receiver_kind"]:checked')?.value || 'same_employee';
+      if (otherInput) otherInput.disabled = kind !== 'other';
+      if (otherBox) otherBox.style.opacity = kind === 'other' ? '1' : '0.5';
+    };
+    radios.forEach(radio => radio.addEventListener('change', syncReceiver));
+    syncReceiver();
+    form.querySelectorAll('[data-received-piece]').forEach(checkbox => {
+      const line = checkbox.closest('[data-received-line]');
+      const qty = line?.querySelector('input[type="number"]');
+      const syncQty = () => { if (qty) qty.disabled = !checkbox.checked; };
+      checkbox.addEventListener('change', syncQty);
+      syncQty();
     });
   });
   document.querySelectorAll('[data-confirm-delete]').forEach(form => {

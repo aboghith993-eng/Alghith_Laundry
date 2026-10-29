@@ -1,0 +1,105 @@
+{% extends 'base.html' %}
+{% block title %}تقرير سكن الموظفين | نظام مغسلة الشركة{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">متابعة سكن الموظفين</p>
+    <h1>تقرير غسيل سكن الموظفين</h1>
+    <p class="muted">كل الموظفين خلال الفترة المحددة، مع بيان المتواجد بالسكن حسب نظام دوامه، وكميات ملاية السرير ولباس المخدة والبطانية المُسلَّمة، ونسبة التغطية مقارنة بالاستحقاق.</p>
+  </div>
+  <div class="heading-actions no-print">
+    <button class="btn btn-primary" type="button" onclick="window.print()">طباعة التقرير</button>
+    <a class="btn btn-outline" href="{{ url_for('housing_report_export', format='pdf', **request.args) }}">تصدير PDF</a>
+    <a class="btn btn-outline" href="{{ url_for('housing_report_export', format='xlsx', **request.args) }}">تصدير Excel</a>
+    <a class="btn btn-outline" href="{{ url_for('housing_report_export', format='csv', **request.args) }}">تصدير CSV</a>
+  </div>
+</div>
+
+<section class="metrics-grid report-metrics">
+  <article class="metric-card"><div class="metric-icon green">♙</div><div><span>إجمالي الموظفين</span><strong>{{ report.summary.employees_total }}</strong><small>المتواجدون بالسكن: {{ report.summary.housing_total }}</small></div></article>
+  <article class="metric-card"><div class="metric-icon amber">◷</div><div><span>بدون أي غسيل</span><strong>{{ report.summary.no_laundry }}</strong><small>لا يوجد طلب ملاية أو مخدة أو بطانية</small></div></article>
+  <article class="metric-card"><div class="metric-icon blue">✓</div><div><span>تغطية مكتملة</span><strong>{{ report.summary.complete }}</strong><small>جزئي: {{ report.summary.partial }} · بدون غسيل: {{ report.summary.none }}</small></div></article>
+  <article class="metric-card"><div class="metric-icon rose">%</div><div><span>متوسط التغطية</span><strong>{{ report.summary.avg_percentage }}%</strong><small>{{ report.start }} إلى {{ report.end }} · {{ report.period_days }} يوماً</small></div></article>
+</section>
+
+<section class="panel report-panel">
+  <form method="get" class="filter-bar report-filter no-print">
+    <label>من تاريخ<input type="date" name="from" value="{{ report.start }}"></label>
+    <label>إلى تاريخ<input type="date" name="to" value="{{ report.end }}"></label>
+    <label style="display:flex;align-items:center;gap:8px;">سكن فقط<input type="checkbox" name="housing" value="1" {% if report.housing_only %}checked{% endif %}></label>
+    <button class="btn btn-outline" type="submit">تحديث التقرير</button>
+  </form>
+
+  <div class="print-report-heading">
+    <h2>{{ report.company_name }} — تقرير غسيل سكن الموظفين</h2>
+    <p>الفترة من {{ report.start }} إلى {{ report.end }} · عدد أيام الفترة: {{ report.period_days }} · تاريخ الإعداد: {{ report.today }}</p>
+  </div>
+
+  <div class="report-footnote" style="margin-bottom:14px;">
+    <strong>آلية الاحتساب:</strong> {{ report.note }}
+  </div>
+
+  <div class="table-wrap">
+    <table class="report-table summary-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>الموظف</th>
+          <th>القسم / الوظيفة</th>
+          <th>التواجد بالسكن</th>
+          <th>نظام الدوام</th>
+          <th>دورة الاستحقاق</th>
+          <th>ملاية سرير<br><small>مسلّمة / مستهدفة</small></th>
+          <th>لباس مخدة<br><small>مسلّمة / مستهدفة</small></th>
+          <th>بطانيات</th>
+          <th>التغطية</th>
+          <th>الحالة</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in report.rows %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><strong>{{ row.employee_name }}</strong><small class="cell-sub">{{ row.employee_code }}</small></td>
+          <td>{{ row.department or '—' }}<small class="cell-sub">{{ row.job_title or '' }}</small></td>
+          <td>
+            {% if row.is_resident %}<span class="status status-approved">متواجد بالسكن</span>{% else %}<span class="soft-pill">{{ row.housing_label }}</span>{% endif %}
+            <small class="cell-sub">{{ row.housing_location or '—' }}</small>
+          </td>
+          <td>{{ row.shift_label }}<small class="cell-sub">{{ row.status_label or '' }}</small></td>
+          <td>{{ row.cycles }} دورة<small class="cell-sub">{{ row.effective_cycle_days }} يوماً للدورة</small></td>
+          <td class="nowrap">{{ row.sheets|money }} / {{ row.target_sheets }}</td>
+          <td class="nowrap">{{ row.pillows|money }} / {{ row.target_pillows }}</td>
+          <td class="nowrap">{{ row.blankets|money }}</td>
+          <td class="nowrap"><strong>{{ row.percentage }}%</strong></td>
+          <td>
+            {% if row.coverage_status == 'مكتمل' %}<span class="status status-approved">مكتمل</span>
+            {% elif row.coverage_status == 'جزئي' %}<span class="status status-pending">جزئي</span>
+            {% else %}<span class="status status-rejected">بدون غسيل</span>{% endif %}
+            {% if row.missing %}<small class="cell-sub">ناقص: {{ row.missing|join('، ') }}</small>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="11"><div class="empty-inline">لا توجد بيانات للفترة المحددة.</div></td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th colspan="6">الإجماليات</th>
+          <th>{{ report.summary.total_sheets|money }}</th>
+          <th>{{ report.summary.total_pillows|money }}</th>
+          <th>{{ report.summary.total_blankets|money }}</th>
+          <th>{{ report.summary.avg_percentage }}%</th>
+          <th>{{ report.summary.complete }} مكتمل / {{ report.summary.partial }} جزئي</th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="report-signatures">
+    <div><span>إعداد متعهد المغسلة</span><div></div><small>الاسم والتوقيع والتاريخ</small></div>
+    <div><span>مراجعة مشرف السكن</span><div></div><small>الاسم والتوقيع والتاريخ</small></div>
+    <div><span>اعتماد الإدارة</span><div></div><small>الاسم والتوقيع والتاريخ</small></div>
+  </div>
+</section>
+{% endblock %}

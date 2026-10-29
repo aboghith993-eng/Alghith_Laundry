@@ -64,7 +64,7 @@ try {
 
 if (-not $WebOnly) {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-  Copy-Item (Join-Path $Project "build\app\outputs\flutter-apk\app-release.apk") (Join-Path $OutDir "laundry-mobile-v1.0-release.apk") -Force
+  Copy-Item (Join-Path $Project "build\app\outputs\flutter-apk\app-release.apk") (Join-Path $OutDir "laundry-mobile-v1.0.1-release.apk") -Force
 }
 
 Write-Host "`n==> تم البناء." -ForegroundColor Green

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -17,7 +17,7 @@
 <body>
 {% if current_user %}
   <header class="topbar no-print">
-    <a class="brand" href="{{ url_for('dashboard') }}">
+    <a class="brand" href="{{ url_for('companies') if is_super_admin else url_for('dashboard') }}">
       <span class="brand-mark">غ</span>
       <span><strong>{{ company_name }}</strong><small>إدارة خدمات الغسيل والكي</small></span>
     </a>
@@ -34,17 +34,23 @@
   <div class="app-shell">
     <aside class="sidebar no-print" data-sidebar>
       <div class="side-caption">القائمة الرئيسية</div>
+      {% if is_super_admin %}
+      <a class="nav-link {% if request.endpoint == 'companies' %}active{% endif %}" href="{{ url_for('companies') }}"><span>▦</span> الشركات</a>
+      <a class="nav-link {% if request.endpoint in ['admin_orders','admin_order_delete'] %}active{% endif %}" href="{{ url_for('admin_orders') }}"><span>▤</span> طلبات جميع الشركات</a>
+      {% else %}
       <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><span>▦</span> لوحة المتابعة</a>
       <a class="nav-link {% if request.endpoint in ['transactions','transaction_new','transaction_detail'] %}active{% endif %}" href="{{ url_for('transactions') }}"><span>▤</span> طلبات المغسلة</a>
       {% if current_user.role in ['admin','supervisor'] %}
       <a class="nav-link {% if request.endpoint in ['employees','employee_edit','employees_import'] %}active{% endif %}" href="{{ url_for('employees') }}"><span>♙</span> قاعدة الموظفين</a>
       {% endif %}
       <a class="nav-link {% if request.endpoint in ['reports','report_export'] %}active{% endif %}" href="{{ url_for('reports') }}"><span>▥</span> التقارير والمستحقات</a>
+      {% if current_user.role in ['admin','supervisor'] %}<a class="nav-link {% if request.endpoint in ['housing_report','housing_report_export'] %}active{% endif %}" href="{{ url_for('housing_report') }}"><span>⌂</span> تقرير سكن الموظفين</a>{% endif %}
       {% if current_user.role == 'admin' %}
       <div class="side-caption side-caption-spaced">إدارة النظام</div>
       <a class="nav-link {% if request.endpoint in ['rates','rate_edit','rate_toggle'] %}active{% endif %}" href="{{ url_for('rates') }}"><span>◇</span> الخدمات والأسعار</a>
       <a class="nav-link {% if request.endpoint in ['users','user_reset','user_toggle'] %}active{% endif %}" href="{{ url_for('users') }}"><span>♧</span> المستخدمون والصلاحيات</a>
       <a class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}" href="{{ url_for('settings') }}"><span>⚙</span> إعدادات النظام</a>
+      {% endif %}
       {% endif %}
       <a class="nav-link {% if request.endpoint == 'account' %}active{% endif %}" href="{{ url_for('account') }}"><span>◉</span> حسابي وكلمة المرور</a>
       <div class="sidebar-foot"><span class="online-dot"></span> {{ database_label }}</div>
@@ -72,3 +78,4 @@
 <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
 </body>
 </html>
+

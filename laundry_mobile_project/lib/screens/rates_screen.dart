@@ -126,6 +126,39 @@ class _ServiceItemCard extends StatelessWidget {
                 ),
                 label: Text(item.active ? 'تعطيل' : 'تفعيل'),
               ),
+              IconButton(
+                tooltip: 'حذف الخدمة',
+                onPressed: () async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (dialogContext) => AlertDialog(
+                      title: const Text('حذف الخدمة'),
+                      content: const Text(
+                        'سيتم حذف الخدمة نهائياً. إذا كانت مستخدمة في طلبات سابقة فسيتم تعطيلها فقط للحفاظ على السجل.',
+                      ),
+                      actions: <Widget>[
+                        TextButton(
+                          onPressed: () => Navigator.of(dialogContext).pop(false),
+                          child: const Text('إلغاء'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.of(dialogContext).pop(true),
+                          child: const Text('حذف'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed != true || !context.mounted) return;
+                  final message = await store.deleteServiceItem(item.id);
+                  if (!context.mounted) return;
+                  if (message == null) {
+                    showSuccess(context, 'تم حذف الخدمة أو تعطيلها.');
+                  } else {
+                    showError(context, message);
+                  }
+                },
+                icon: const Icon(Icons.delete_outline_rounded, color: AppColors.red, size: 20),
+              ),
             ],
           ),
         ],

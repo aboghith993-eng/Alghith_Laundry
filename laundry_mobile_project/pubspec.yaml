@@ -1,7 +1,7 @@
 name: laundry_mobile
 description: تطبيق جوال نظام مغسلة الشركة — إدارة خدمات الغسيل واعتماد المستحقات.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -13,6 +13,8 @@ dependencies:
     sdk: flutter
   shared_preferences: ^2.5.3
   http: ^1.2.2
+  path_provider: ^2.1.5
+  share_plus: ^10.1.4
 
 dev_dependencies:
   flutter_test:

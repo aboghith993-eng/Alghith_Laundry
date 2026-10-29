@@ -1,9 +1,15 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../models/laundry_models.dart';
+import '../services/laundry_api.dart';
 import '../state/store_scope.dart';
 import '../utils/format.dart';
 import '../widgets/app_widgets.dart';
+import 'housing_report_screen.dart';
 import 'navigation.dart';
 
 /// التقارير والمستحقات — مطابقة لشاشة `reports.html`.
@@ -18,6 +24,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
   String _from = '';
   String _to = '';
   String _status = 'all';
+  String _fulfillment = 'all';
+  String? _exporting;
 
   @override
   void initState() {
@@ -31,8 +39,48 @@ class _ReportsScreenState extends State<ReportsScreen> {
         if (_from.isNotEmpty && order.serviceDate.compareTo(_from) < 0) return false;
         if (_to.isNotEmpty && order.serviceDate.compareTo(_to) > 0) return false;
         if (_status != 'all' && order.status != _status) return false;
+        if (_fulfillment == 'received' && order.isDelivered) return false;
+        if (_fulfillment == 'delivered' && !order.isDelivered) return false;
+        if (_fulfillment == 'partial' && !order.isPartiallyReceived) return false;
         return true;
       }).toList();
+
+  Future<void> _export(String format) async {
+    final store = StoreScope.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _exporting = format);
+    try {
+      final bytes = await store.exportReport(
+        format: format,
+        from: _from,
+        to: _to,
+        status: _status,
+        fulfillment: _fulfillment,
+      );
+      final directory = await getTemporaryDirectory();
+      final stamp = '${_from.isEmpty ? 'all' : _from}-${_to.isEmpty ? 'all' : _to}';
+      final file = File('${directory.path}/laundry-report-$stamp.$format');
+      await file.writeAsBytes(bytes, flush: true);
+      final mimeType = switch (format) {
+        'pdf' => 'application/pdf',
+        'csv' => 'text/csv',
+        _ => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      };
+      await Share.shareXFiles(
+        <XFile>[
+          XFile(file.path, mimeType: mimeType),
+        ],
+        subject: 'تقرير المغسلة ${store.companyName}',
+        text: 'تقرير خدمات المغسلة من $_from إلى $_to',
+      );
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('تعذّر تصدير التقرير: $error')));
+    } finally {
+      if (mounted) setState(() => _exporting = null);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +97,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final key = order.employeeCode.isEmpty ? order.displayName : order.employeeCode;
       final bucket = perEmployee.putIfAbsent(key, () => <String, double>{});
       for (final item in order.items) {
-        bucket[item.itemName] = (bucket[item.itemName] ?? 0) + item.quantity;
+        bucket[item.itemName] = (bucket[item.itemName] ?? 0) + item.effectiveQuantity;
         columns.add(item.itemName);
       }
     }
@@ -69,6 +117,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
               subtitle: 'حدد الفترة ثم راجع المستحقات المعتمدة لكل موظف.',
             ),
             const SizedBox(height: 14),
+            if (store.currentUser?.role != 'contractor')
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const HousingReportScreen()),
+                ),
+                icon: const Icon(Icons.home_work_rounded, size: 18),
+                label: const Text('تقرير غسيل سكن الموظفين ونسب التغطية'),
+              ),
+            const SizedBox(height: 12),
             AppPanel(
               padding: const EdgeInsets.all(14),
               child: Column(
@@ -121,6 +178,33 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: <Widget>[
+                      for (final entry in const <String, String>{
+                        'all': 'كل حالات التسليم',
+                        'received': 'لم يُسلَّم',
+                        'delivered': 'تم التسليم',
+                        'partial': 'مستلم جزئياً',
+                      }.entries)
+                        ChoiceChip(
+                          label: Text(entry.value),
+                          selected: _fulfillment == entry.key,
+                          onSelected: (_) => setState(() => _fulfillment = entry.key),
+                          selectedColor: AppColors.softAmber,
+                          labelStyle: TextStyle(
+                            color: _fulfillment == entry.key ? AppColors.amber : AppColors.ink,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          showCheckmark: false,
+                          side: const BorderSide(color: AppColors.line),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: <Widget>[
                       Text('${orders.length} طلب', style: Theme.of(context).textTheme.bodySmall),
@@ -138,6 +222,70 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         label: const Text('إعادة الضبط'),
                       ),
                     ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            AppPanel(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text(
+                    'تصدير التقرير بالفلاتر الحالية ومشاركته',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.ink),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _exporting == null ? () => _export('pdf') : null,
+                          icon: _exporting == 'pdf'
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                )
+                              : const Icon(Icons.picture_as_pdf_rounded, size: 18),
+                          label: const Text('PDF'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _exporting == null ? () => _export('xlsx') : null,
+                          icon: _exporting == 'xlsx'
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.table_view_rounded, size: 18),
+                          label: const Text('Excel'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _exporting == null ? () => _export('csv') : null,
+                          icon: _exporting == 'csv'
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.description_outlined, size: 18),
+                          label: const Text('CSV'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'يُنتج الخادم الملف بنفس بيانات وتفاصيل التقرير، ثم يفتح نافذة الحفظ أو المشاركة.',
+                    style: TextStyle(fontSize: 11.5, color: AppColors.muted),
                   ),
                 ],
               ),

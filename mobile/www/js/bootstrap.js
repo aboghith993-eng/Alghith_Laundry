@@ -5,7 +5,7 @@ import {
   verifyLocalPin, hasLocalPin, unlockWithLocalPin, isOnline, setOnline, saveConfig,
   syncEverything, pendingCount, snapshotMeta, autoSync, searchEmployee,
   isLocked, setLocked, getIdentity, hasServerUrl, backendBaseUrl, testServerConnection,
-  isOnlineSession,
+  isOnlineSession, BUILD_DEFAULT_SERVER,
 } from "./store.js";
 
 import { render, setPage, setDraftEmployee, toast, esc } from "./app.js";
@@ -27,6 +27,10 @@ function showLogin() {
       if (server) $("#login-server").value = server;
     } catch { /* ignore */ }
   }
+  // إظهار حقل الخادم فقط لمدير النظام أو إذا لم يتم ضبط خادم افتراضي
+  const showServer = lastUser === "admin" || !hasServerUrl();
+  if ($("#field-server")) $("#field-server").classList.toggle("hidden", !showServer);
+  if ($("#row-server-test")) $("#row-server-test").classList.toggle("hidden", !showServer);
   if (lastUser && hasLocalPin(lastUser)) $("#pin-form").classList.remove("hidden");
   updateOfflineHint();
   updateServerStatus();
@@ -196,10 +200,13 @@ function bindGlobal() {
     });
   }
 
-  $("#login-server").addEventListener("change", () => {
-    const server = $("#login-server").value.trim();
-    if (server) saveConfig({ server_url: server });
-    updateServerStatus();
+  $("#login-username").addEventListener("input", () => {
+    const u = $("#login-username").value.trim();
+    const showServer = u === "admin" || !hasServerUrl();
+    if ($("#field-server")) $("#field-server").classList.toggle("hidden", !showServer);
+    if ($("#row-server-test")) $("#row-server-test").classList.toggle("hidden", !showServer);
+    if (u && hasLocalPin(u)) $("#pin-form").classList.remove("hidden");
+    else $("#pin-form").classList.add("hidden");
   });
 
   $$(".tab").forEach((tab) => {

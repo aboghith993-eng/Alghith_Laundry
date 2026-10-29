@@ -12,6 +12,8 @@ class AppUser {
     required this.role,
     required this.active,
     this.roleLabel = '',
+    this.companyId,
+    this.systemAdmin = false,
   });
 
   final int id;
@@ -20,10 +22,15 @@ class AppUser {
   final String role;
   final String roleLabel;
   final bool active;
+  final int? companyId;
+  final bool systemAdmin;
 
   bool get isAdmin => role == 'admin';
   bool get isSupervisor => role == 'supervisor';
   bool get isContractor => role == 'contractor';
+  bool get isSuperAdmin => role == 'super_admin' || systemAdmin;
+
+  bool get isSystemAdmin => systemAdmin || role == 'super_admin';
 
   /// يمكن إنشاء الطلبات وتسجيل التسليم.
   bool get canCreateOrder => role == 'admin' || role == 'contractor';
@@ -44,6 +51,8 @@ class AppUser {
         role: _toStr(json['role']),
         roleLabel: _toStr(json['role_label'] ?? json['roleLabel']),
         active: _toBool(json['active'], fallback: true),
+        companyId: json['company_id'] == null ? null : _toInt(json['company_id']),
+        systemAdmin: _toBool(json['system_admin'] ?? json['systemAdmin'] ?? json['is_system_admin'], fallback: false),
       );
 
   Map<String, dynamic> toJson() => {
@@ -53,7 +62,143 @@ class AppUser {
         'role': role,
         'role_label': roleLabel,
         'active': active,
+        'company_id': companyId,
       };
+}
+
+class Company {
+  Company({
+    required this.id,
+    required this.code,
+    required this.name,
+    this.active = true,
+    this.employees = 0,
+    this.users = 0,
+    this.orders = 0,
+  });
+
+  final int id;
+  final String code;
+  final String name;
+  final bool active;
+  final int employees;
+  final int users;
+  final int orders;
+
+  static Company fromJson(Map<String, dynamic> json) => Company(
+        id: _toInt(json['id']),
+        code: _toStr(json['code']),
+        name: _toStr(json['name']),
+        active: _toBool(json['active'], fallback: true),
+        employees: _toInt(json['employees']),
+        users: _toInt(json['users']),
+        orders: _toInt(json['orders']),
+      );
+}
+
+class HousingReportRow {
+  HousingReportRow({
+    required this.employeeCode,
+    required this.employeeName,
+    this.department = '',
+    this.jobTitle = '',
+    this.housingLocation = '',
+    this.serviceType = '',
+    this.shiftLabel = '',
+    this.statusLabel = '',
+    this.housingLabel = '',
+    this.coverageStatus = '',
+    this.isResident = false,
+    this.cycles = 1,
+    this.effectiveCycleDays = 30,
+    this.sheets = 0,
+    this.pillows = 0,
+    this.blankets = 0,
+    this.targetSheets = 0,
+    this.targetPillows = 0,
+    this.percentage = 0,
+    this.missing = const <String>[],
+  });
+
+  final String employeeCode;
+  final String employeeName;
+  final String department;
+  final String jobTitle;
+  final String housingLocation;
+  final String serviceType;
+  final String shiftLabel;
+  final String statusLabel;
+  final String housingLabel;
+  final String coverageStatus;
+  final bool isResident;
+  final int cycles;
+  final int effectiveCycleDays;
+  final double sheets;
+  final double pillows;
+  final double blankets;
+  final int targetSheets;
+  final int targetPillows;
+  final double percentage;
+  final List<String> missing;
+
+  static HousingReportRow fromJson(Map<String, dynamic> json) => HousingReportRow(
+        employeeCode: _toStr(json['employee_code']),
+        employeeName: _toStr(json['employee_name']),
+        department: _toStr(json['department']),
+        jobTitle: _toStr(json['job_title']),
+        housingLocation: _toStr(json['housing_location']),
+        serviceType: _toStr(json['service_type']),
+        shiftLabel: _toStr(json['shift_label']),
+        statusLabel: _toStr(json['status_label']),
+        housingLabel: _toStr(json['housing_label']),
+        coverageStatus: _toStr(json['coverage_status']),
+        isResident: _toBool(json['is_resident']),
+        cycles: _toInt(json['cycles']),
+        effectiveCycleDays: _toInt(json['effective_cycle_days']),
+        sheets: _toDouble(json['sheets']),
+        pillows: _toDouble(json['pillows']),
+        blankets: _toDouble(json['blankets']),
+        targetSheets: _toInt(json['target_sheets']),
+        targetPillows: _toInt(json['target_pillows']),
+        percentage: _toDouble(json['percentage']),
+        missing: (json['missing'] as List<dynamic>? ?? const <dynamic>[])
+            .map((dynamic value) => value.toString())
+            .toList(),
+      );
+}
+
+class HousingReport {
+  HousingReport({
+    required this.start,
+    required this.end,
+    required this.periodDays,
+    this.note = '',
+    this.summary = const <String, dynamic>{},
+    this.rows = const <HousingReportRow>[],
+  });
+
+  final String start;
+  final String end;
+  final int periodDays;
+  final String note;
+  final Map<String, dynamic> summary;
+  final List<HousingReportRow> rows;
+
+  int summaryInt(String key) => _toInt(summary[key]);
+
+  double summaryDouble(String key) => _toDouble(summary[key]);
+
+  static HousingReport fromJson(Map<String, dynamic> json) => HousingReport(
+        start: _toStr(json['start']),
+        end: _toStr(json['end']),
+        periodDays: _toInt(json['period_days']),
+        note: _toStr(json['note']),
+        summary: (json['summary'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{},
+        rows: (json['rows'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<Map<dynamic, dynamic>>()
+            .map((Map<dynamic, dynamic> row) => HousingReportRow.fromJson(row.cast<String, dynamic>()))
+            .toList(),
+      );
 }
 
 class Employee {
@@ -213,6 +358,7 @@ class OrderItem {
     required this.unitPrice,
     required this.lineTotal,
     this.serviceItemId,
+    this.receivedQuantity,
   });
 
   final int id;
@@ -222,6 +368,18 @@ class OrderItem {
   final double quantity;
   final double unitPrice;
   final double lineTotal;
+
+  /// إجمالي ما استُلم من هذا الصنف من المغسلة (قد يكون جزئياً).
+  final double? receivedQuantity;
+
+  double get received => receivedQuantity ?? 0;
+
+  double get remaining => quantity - received > 0 ? quantity - received : 0;
+
+  bool get isFullyReceived => receivedQuantity != null && remaining <= 0;
+
+  /// الكمية المعتمدة في التقارير: المستلمة إن سُجلت وإلا الكمية الأصلية.
+  double get effectiveQuantity => receivedQuantity ?? quantity;
 
   static OrderItem fromJson(Map<String, dynamic> json) => OrderItem(
         id: _toInt(json['id']),
@@ -233,6 +391,9 @@ class OrderItem {
         quantity: _toDouble(json['quantity']),
         unitPrice: _toDouble(json['unit_price']),
         lineTotal: _toDouble(json['line_total']),
+        receivedQuantity: json['received_quantity'] == null
+            ? null
+            : _toDouble(json['received_quantity']),
       );
 
   Map<String, dynamic> toJson() => {
@@ -243,6 +404,7 @@ class OrderItem {
         'quantity': quantity,
         'unit_price': unitPrice,
         'line_total': lineTotal,
+        'received_quantity': receivedQuantity,
       };
 }
 
@@ -279,6 +441,9 @@ class LaundryOrder {
     this.confirmerName = '',
     this.delivererName = '',
     this.deliveredAt = '',
+    this.receiverKind = '',
+    this.receiverName = '',
+    this.receivedAt = '',
     this.confirmedAt = '',
     this.createdAt = '',
     this.rejectionReason = '',
@@ -314,6 +479,9 @@ class LaundryOrder {
   final String status;
   final String fulfillmentStatus;
   final String deliveredAt;
+  final String receiverKind;
+  final String receiverName;
+  final String receivedAt;
   final String creatorName;
   final String confirmerName;
   final String delivererName;
@@ -332,6 +500,16 @@ class LaundryOrder {
   bool get isApproved => status == 'approved';
   bool get isRejected => status == 'rejected';
   bool get isDelivered => fulfillmentStatus == 'delivered';
+
+  /// مجموع القطع التي لم تُستلم بعد من المغسلة.
+  double get remainingTotal =>
+      items.fold<double>(0, (total, item) => total + item.remaining);
+
+  /// هل ما زالت هناك قطع يمكن استلامها لاحقاً؟
+  bool get hasRemainingPieces => remainingTotal > 0;
+
+  /// تم استلام جزء من القطع وبقيت أجزاء أخرى.
+  bool get isPartiallyReceived => isDelivered && hasRemainingPieces;
 
   /// الاسم المعروض: اسم الزائر للسجل العام، وإلا اسم الموظف.
   String get displayName =>
@@ -377,6 +555,9 @@ class LaundryOrder {
         fulfillmentStatus:
             _toStr(json['fulfillment_status'], fallback: 'received'),
         deliveredAt: _toStr(json['delivered_at']),
+        receiverKind: _toStr(json['receiver_kind']),
+        receiverName: _toStr(json['receiver_name']),
+        receivedAt: _toStr(json['received_at']),
         creatorName: _toStr(json['creator_name']),
         confirmerName: _toStr(json['confirmer_name']),
         delivererName: _toStr(json['deliverer_name']),
@@ -419,6 +600,9 @@ class LaundryOrder {
         'status': status,
         'fulfillment_status': fulfillmentStatus,
         'delivered_at': deliveredAt,
+        'receiver_kind': receiverKind,
+        'receiver_name': receiverName,
+        'received_at': receivedAt,
         'creator_name': creatorName,
         'confirmer_name': confirmerName,
         'deliverer_name': delivererName,
