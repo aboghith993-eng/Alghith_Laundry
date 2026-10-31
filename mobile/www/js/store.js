@@ -428,6 +428,7 @@ export function getQueue() {
 export function enqueueOrder(order) {
   state.queue.push({
     client_uuid: order.client_uuid,
+    employee_id: order.employee_id || null,
     employee_code: order.employee_code,
     person_name: order.person_name || "",
     service_date: order.service_date,
@@ -467,6 +468,7 @@ export async function syncOrders() {
   state.syncing = true;
   const batch = state.queue.slice(0, 50).map((o) => ({
     client_uuid: o.client_uuid,
+    employee_id: o.employee_id || null,
     employee_code: o.employee_code,
     person_name: o.person_name || "",
     service_date: o.service_date,
@@ -527,6 +529,7 @@ function normalizeServerOrder(row) {
     client_uuid: row.client_uuid || `srv-${row.id}`,
     server_id: row.id,
     reference: row.reference || "",
+    employee_id: row.employee_id || null,
     employee_code: row.employee_code || "",
     employee_name: row.employee_name || "",
     person_name: row.person_name || "",

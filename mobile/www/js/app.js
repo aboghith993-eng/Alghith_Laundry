@@ -513,6 +513,7 @@ async function saveOrder() {
   for (const [itemId, line] of lines) items[itemId] = line;
   const order = {
     client_uuid: clientUuid,
+    employee_id: Number(draft.employee.id) || null,
     employee_code: draft.employee.employee_code,
     person_name: draft.person_name.trim(),
     service_date: draft.service_date,

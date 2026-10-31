@@ -49,6 +49,13 @@ ROLE_LABELS = {
     "supervisor": "مشرف السكن",
 }
 
+#: تحويل الأرقام العربية/الفارسية إلى أرقام لاتينية لمطابقة أكواد الموظفين.
+_ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+
+
+def _normalize_code(value: Any) -> str:
+    return str(value or "").translate(_ARABIC_DIGITS).strip()
+
 
 def _serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="laundry-mobile-v1")
@@ -615,18 +622,32 @@ def _create_order_payload(raw: dict[str, Any]) -> dict[str, Any]:
                 "reference": existing["reference"],
             }
 
-    employee_id = raw.get("employee_id")
-    try:
-        employee_id = int(employee_id)
-    except (TypeError, ValueError):
-        return {"client_uuid": client_uuid, "status": "error", "error": "اختر موظفاً فعالاً من قاعدة البيانات."}
+    # يقبل التطبيق إرسال employee_id (النسخة الحديثة) أو employee_code فقط
+    # (الطلبات المحفوظة في طابور الأجهزة القديمة) — كلاهما يُحلّ إلى نفس الموظف.
+    employee = None
+    raw_employee_id = raw.get("employee_id")
+    if raw_employee_id not in (None, ""):
+        try:
+            employee_id = int(raw_employee_id)
+        except (TypeError, ValueError):
+            employee_id = 0
+        if employee_id > 0:
+            employee = db.execute(
+                "SELECT * FROM employees WHERE id=? AND company_id=? AND active=1",
+                (employee_id, company_id),
+            ).fetchone()
 
-    employee = db.execute(
-        "SELECT * FROM employees WHERE id=? AND company_id=? AND active=1",
-        (employee_id, company_id),
-    ).fetchone()
+    if not employee:
+        employee_code = _normalize_code(raw.get("employee_code"))
+        if employee_code:
+            employee = db.execute(
+                "SELECT * FROM employees WHERE company_id=? AND active=1 AND employee_code=?",
+                (company_id, employee_code),
+            ).fetchone()
+
     if not employee:
         return {"client_uuid": client_uuid, "status": "error", "error": "اختر موظفاً فعالاً من قاعدة البيانات."}
+    employee_id = int(employee["id"])
 
     service_date = safe_date(str(raw.get("service_date", "")), "")
     if not service_date:
