@@ -96,17 +96,20 @@ class LaundryApi {
     return (data as Map).cast<String, dynamic>();
   }
 
-  Future<void> deliverOrder(
+  /// يسجّل استلام القطع النظيفة ويعيد حالة الأصناف بعد التسليم
+  /// (الكمية المستلمة والمتبقية) لتحديث الشاشة فوراً دون انتظار المزامنة.
+  Future<Map<String, dynamic>> deliverOrder(
     int orderId, {
     String receiverKind = 'same_employee',
     String receiverName = '',
     List<Map<String, dynamic>>? pieces,
   }) async {
-    await _request('POST', '/api/orders/$orderId/deliver', body: <String, dynamic>{
+    final data = await _request('POST', '/api/orders/$orderId/deliver', body: <String, dynamic>{
       'receiver_kind': receiverKind,
       'receiver_name': receiverName,
       if (pieces != null) 'pieces': pieces,
     });
+    return (data as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
   }
 
   Future<void> confirmOrder(int orderId, String decision, {String reason = ''}) async {

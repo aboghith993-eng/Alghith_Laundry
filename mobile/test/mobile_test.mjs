@@ -190,5 +190,61 @@ check("تسجيل الخروج يحفظ الهوية للفتح دون اتصا�
 check("الجلسة مقفلة بعد الخروج", storeMod.isLocked() === true);
 check("الرمز المحلي يبقى متاحاً بعد الخروج", storeMod.hasLocalPin("admin") === true);
 
+console.log("\n== 12) التصدير: Excel / CSV / PDF عبر الجسر الأصلي ==");
+const exportMod = await import("../www/js/export.js");
+const nativeCalls = [];
+globalThis.window.Capacitor = { isNativePlatform: () => true };
+globalThis.window.LaundryApp = {
+  openFile: (f, m, b64) => nativeCalls.push({ kind: "openFile", f, m, b64 }),
+  printHtml: (n, h) => nativeCalls.push({ kind: "printHtml", n, h }),
+  shareText: (s, t) => nativeCalls.push({ kind: "shareText", s, t }),
+  notify: (msg) => nativeCalls.push({ kind: "notify", msg }),
+};
+
+const xls = exportMod.tableToXlsText("الكميات", ["الاسم", "الكمية"], [["علي", 5], ["سمير", 2.5]], "تقرير الكميات");
+check("Excel SpreadsheetML سليم", xls.includes("<Workbook") && xls.includes('mso-application progid="Excel.Sheet"') && xls.includes("</Workbook>"));
+check("Excel يظهر العنوان والرأس", xls.includes('ss:StyleID="title"') && xls.includes('ss:StyleID="hdr"') && xls.includes(">الاسم<"));
+check("Excel الأرقام للنوع Number", xls.includes('<Data ss:Type="Number">5</Data>') && xls.includes("2.5"));
+check("Excel الهروب الآمن للرموز", exportMod.tableToXlsText("s", ["x"], [["a<b>&\"z"]]).includes("a&lt;b&gt;&amp;&quot;z"));
+
+exportMod.downloadTable("الكميات", "test-report.xls", ["أ"], [["ب"]], "عنوان");
+let last = nativeCalls.at(-1) || {};
+check("downloadTable يمر عبر openFile الأصلي", last.kind === "openFile" && last.f === "test-report.xls" && String(last.m).includes("ms-excel"), JSON.stringify(last));
+check("الملف يحتوي BOM UTF-8", Buffer.from(last.b64 || "", "base64").subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])));
+
+const csv = exportMod.toCsv(["الاسم", "ملاحظة"], [["علي", "سطر, فيه فاصلة"], ["سمير", 'حرف"اقتباس']]);
+check("CSV يلف القيم الخاصة", csv.includes('"سطر, فيه فاصلة"') && csv.includes('"حرف""اقتباس"'), csv);
+exportMod.downloadCsv("test-report.csv", "ع,R");
+last = nativeCalls.at(-1) || {};
+check("downloadCsv يمر عبر الجسر", last.kind === "openFile" && last.f === "test-report.csv" && last.m === "text/csv", JSON.stringify(last));
+
+const sentPdf = exportMod.printReportSections("تقرير المغسلة", ["سطر إعداد"], [{ heading: "قسم", headers: ["الحقل"], rows: [[1]] }]);
+last = nativeCalls.at(-1) || {};
+check("printReportSections يعيد true عبر الجسر", sentPdf === true);
+check("الطباعة تُرسل printHtml", last.kind === "printHtml" && last.n === "تقرير المغسلة", JSON.stringify(last));
+check("HTML الطباعة عربي RTL مع أنماط", String(last.h).includes('dir="rtl"') && String(last.h).includes("<title>") && String(last.h).includes("<style>"));
+
+exportMod.shareText("موضوع", "نص المشاركة");
+last = nativeCalls.at(-1) || {};
+check("shareText يمر عبر الجسر", last.kind === "shareText" && last.t === "نص المشاركة", JSON.stringify(last));
+delete globalThis.window.LaundryApp;
+delete globalThis.window.Capacitor;
+
+console.log("\n== 13) شاشة التقارير تحتوي أزرار التصدير ==");
+try {
+  const appMod = await import("../www/js/app.js");
+  // زرّا تصدير الطلبات والتقرير موجودان في الشيفرة المصدرية للشاشات.
+  const appSrc = fs.readFileSync(new URL("../www/js/app.js", import.meta.url), "utf8");
+  check("زر تصدير Excel للتقارير", appSrc.includes('id="rep-export-xls"'));
+  check("زر تصدير CSV للتقارير", appSrc.includes('id="rep-export-csv"'));
+  check("زر طباعة PDF للتقارير", appSrc.includes('id="rep-export-pdf"'));
+  check("زر تصدير Excel للطلبات", appSrc.includes('id="orders-export-xls"'));
+  check("زر تصدير CSV للطلبات", appSrc.includes('id="orders-export-csv"'));
+  check("الربط يعمل مع شاشة التقارير", appSrc.includes("bindReportsPage"));
+  check("وحدة app.js ما زالت تُحمَّل", typeof appMod.render === "function");
+} catch (err) {
+  check("شاشة التقارير تحتوي أزرار التصدير", false, String(err.message));
+}
+
 console.log(`\n=== النتيجة: ${pass} ناجح / ${fail} فاشل ===`);
 process.exit(fail ? 1 : 0);

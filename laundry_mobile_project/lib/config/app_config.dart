@@ -24,6 +24,12 @@ class AppConfig {
   static const String sessionPrefsKey = 'laundry_session_v1';
   static const String cachePrefsKey = 'laundry_cache_v1';
 
+  /// مفتاح آخر حساب سجّل الدخول بنجاح على هذا الجهاز.
+  ///
+  /// يبقى محفوظاً حتى بعد تسجيل الخروج، ليتيح «الدخول دون اتصال» عندما
+  /// يكون الخادم متوقفاً أو الشبكة غير متاحة.
+  static const String offlineProfilePrefsKey = 'laundry_offline_profile_v1';
+
   /// مهلة الاتصال بالخادم.
   ///
   /// الخطة المجانية على Render تُنيم الخادم عند عدم الاستخدام، ويستغرق استيقاظه

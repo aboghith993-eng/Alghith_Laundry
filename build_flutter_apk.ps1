@@ -64,7 +64,12 @@ try {
 
 if (-not $WebOnly) {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-  Copy-Item (Join-Path $Project "build\app\outputs\flutter-apk\app-release.apk") (Join-Path $OutDir "laundry-mobile-v1.0.1-release.apk") -Force
+  # اسم الملف يتبع الإصدار المكتوب في pubspec.yaml تلقائياً.
+  $versionLine = Select-String -LiteralPath (Join-Path $Project "pubspec.yaml") -Pattern '^version:\s*(\S+)' | Select-Object -First 1
+  $versionFull = if ($versionLine) { $versionLine.Matches[0].Groups[1].Value } else { "0.0.0" }
+  $versionName = ($versionFull -split '\+')[0]
+  $apkName = "laundry-mobile-v$versionName-release.apk"
+  Copy-Item (Join-Path $Project "build\app\outputs\flutter-apk\app-release.apk") (Join-Path $OutDir $apkName) -Force
 }
 
 Write-Host "`n==> تم البناء." -ForegroundColor Green

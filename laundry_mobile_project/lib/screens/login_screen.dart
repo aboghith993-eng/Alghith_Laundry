@@ -87,9 +87,25 @@ class _LoginScreenState extends State<LoginScreen> {
     });
   }
 
+  /// فتح التطبيق دون إنترنت بالحساب المحفوظ على الجهاز (بدون رمز جلسة).
+  Future<void> _loginOffline() async {
+    final store = StoreScope.read(context);
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final message = await store.loginOffline();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = message;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = StoreScope.of(context);
+    final offlineUser = store.offlineUser;
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: SafeArea(
@@ -216,6 +232,30 @@ class _LoginScreenState extends State<LoginScreen> {
                             )
                           : const Text('تسجيل الدخول'),
                     ),
+                    if (offlineUser != null) ...<Widget>[
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        onPressed: _busy ? null : _loginOffline,
+                        icon: const Icon(Icons.wifi_off_rounded, size: 18),
+                        label: Text(
+                          'الدخول دون اتصال — ${offlineUser.fullName.isNotEmpty ? offlineUser.fullName : offlineUser.username}',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'يُفتح التطبيق بالبيانات المحفوظة على الجهاز. المزامنة تتوقف حتى عودة الخادم.',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ] else if (!store.isOnline) ...<Widget>[
+                      const SizedBox(height: 10),
+                      Text(
+                        'لا يوجد حساب محفوظ على هذا الجهاز — يلزم اتصال بالإنترنت لتسجيل الدخول أول مرة.',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.amber),
+                      ),
+                    ],
                   ],
                 ),
               ),

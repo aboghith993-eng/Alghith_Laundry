@@ -42,3 +42,9 @@ mobile/www/js/main.js
 mobile/www/js/native-web.js
 mobile/www/js/web-app.js
 mobile/www/js/core/
+
+mobile/next/node_modules/
+
+mobile/next/.next/
+
+mobile/next/tsconfig.tsbuildinfo

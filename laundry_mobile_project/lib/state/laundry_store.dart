@@ -51,9 +51,20 @@ class LaundryStore extends ChangeNotifier {
   // ---- الجلسة ----
   AppUser? currentUser;
   String? _token;
+  Map<String, dynamic>? _offlineProfile;
 
   bool get isLoggedIn => currentUser != null;
   String? get token => _token;
+
+  /// آخر حساب سجّل الدخول بنجاح على هذا الجهاز (يبقى بعد تسجيل الخروج).
+  AppUser? get offlineUser =>
+      _offlineProfile == null ? null : AppUser.fromJson(_offlineProfile!);
+
+  /// هل يمكن الدخول الآن دون إنترنت باستخدام الحساب المحفوظ؟
+  bool get canLoginOffline => currentUser == null && _offlineProfile != null;
+
+  /// هل توجد بيانات محفوظة على الجهاز يمكن عرضها دون اتصال؟
+  bool get hasOfflineData => employees.isNotEmpty || serviceItems.isNotEmpty || orders.isNotEmpty;
 
   // ---- البيانات ----
   final List<Employee> employees = <Employee>[];
@@ -95,6 +106,7 @@ class LaundryStore extends ChangeNotifier {
   Future<void> _init() async {
     await _restoreSession();
     await _restoreCache();
+    await _loadOfflineProfile();
     await _applySeedIfEmpty();
     await _loadBaseUrl();
     _api = LaundryApi(baseUrl: _baseUrl, token: _token);
@@ -153,6 +165,9 @@ class LaundryStore extends ChangeNotifier {
       final userJson = data['user'];
       if (userJson is Map) {
         currentUser = AppUser.fromJson(userJson.cast<String, dynamic>());
+        // ترقية تلقائية: من سجّل الدخول سابقاً يستطيع الدخول دون اتصال لاحقاً.
+        _offlineProfile ??= userJson.cast<String, dynamic>();
+        await _saveOfflineProfile();
       }
     } catch (_) {}
   }
@@ -160,13 +175,35 @@ class LaundryStore extends ChangeNotifier {
   Future<void> _persistSession() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (currentUser == null || _token == null) {
+      // الجلسة قد تكون بلا رمز (دخول دون اتصال) — نحفظها ليستمر الفتح محلياً.
+      if (currentUser == null) {
         await prefs.remove(AppConfig.sessionPrefsKey);
         return;
       }
       await prefs.setString(
         AppConfig.sessionPrefsKey,
         jsonEncode({'token': _token, 'user': currentUser!.toJson()}),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _loadOfflineProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(AppConfig.offlineProfilePrefsKey);
+      if (raw == null || raw.isEmpty) return;
+      final data = jsonDecode(raw);
+      if (data is Map) _offlineProfile = data.cast<String, dynamic>();
+    } catch (_) {}
+  }
+
+  Future<void> _saveOfflineProfile() async {
+    if (_offlineProfile == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        AppConfig.offlineProfilePrefsKey,
+        jsonEncode(_offlineProfile),
       );
     } catch (_) {}
   }
@@ -256,6 +293,13 @@ class LaundryStore extends ChangeNotifier {
   /// مزامنة كاملة: رفع الطلبات المعلّقة ثم جلب اللقطة من الخادم.
   Future<void> syncNow() async {
     if (_syncInFlight || _api == null || currentUser == null || isSuperAdmin) return;
+    // جلسة عدم الاتصال بلا رمز: لا نحاول الطلب حتى لا يُرفض بـ 401 ويُخرج المستخدم.
+    if (_token == null) {
+      _online = false;
+      _lastSyncError = 'أنت في وضع عدم الاتصال — سجّل الدخول عبر الإنترنت لتفعيل المزامنة.';
+      notifyListeners();
+      return;
+    }
     _syncInFlight = true;
     _syncing = true;
     notifyListeners();
@@ -336,6 +380,8 @@ class LaundryStore extends ChangeNotifier {
       _api!.token = _token;
       final userJson = (result['user'] as Map).cast<String, dynamic>();
       currentUser = AppUser.fromJson(userJson);
+      _offlineProfile = userJson;
+      await _saveOfflineProfile();
       await _persistSession();
       _startSyncTimer();
       notifyListeners();
@@ -346,6 +392,25 @@ class LaundryStore extends ChangeNotifier {
     } catch (e) {
       return 'تعذّر تسجيل الدخول: $e';
     }
+  }
+
+  /// دخول دون إنترنت باستخدام آخر حساب سجّل الدخول بنجاح على هذا الجهاز.
+  ///
+  /// لا يمنح رمز وصول ولا يحاول المزامنة؛ العمليات تُحفظ محلياً فقط حتى
+  /// تسجيل الدخول عبر الإنترنت مرة أخرى.
+  Future<String?> loginOffline() async {
+    final profile = _offlineProfile;
+    if (profile == null) {
+      return 'لا يوجد حساب محفوظ على هذا الجهاز. يلزم الاتصال بالإنترنت لتسجيل الدخول أول مرة.';
+    }
+    currentUser = AppUser.fromJson(profile);
+    _token = null;
+    _api = LaundryApi(baseUrl: _baseUrl);
+    _online = false;
+    _lastSyncError = 'وضع عدم الاتصال — تُعرض البيانات المحفوظة على الجهاز.';
+    await _persistSession();
+    notifyListeners();
+    return null;
   }
 
   Future<void> logout() async {
@@ -470,19 +535,54 @@ class LaundryStore extends ChangeNotifier {
     List<Map<String, dynamic>>? pieces,
   }) async {
     try {
-      await _api!.deliverOrder(
+      final result = await _api!.deliverOrder(
         orderId,
         receiverKind: receiverKind,
         receiverName: receiverName,
         pieces: pieces,
       );
-      await syncNow();
+      // حدّث الكميات المستلمة محلياً فوراً (وإن تعذّرت المزامنة) حتى لا يعيد
+      // حوار الاستلام التالي اقتراح كميات سبق استلامها.
+      applyDeliveryResult(orderId, result);
+      await _persistCache();
+      unawaited(syncNow());
       return null;
     } on ApiException catch (e) {
       return e.message;
     } catch (e) {
       return 'تعذّر تسجيل التسليم: $e';
     }
+  }
+
+  /// تطبيق نتيجة التسليم القادمة من الخادم على الطلب المحلي.
+  void applyDeliveryResult(int orderId, Map<String, dynamic> result) {
+    final index = orders.indexWhere((order) => order.id == orderId);
+    if (index < 0) return;
+    final current = orders[index];
+    final json = current.toJson();
+    final updatedItems = (result['items'] as List?) ?? const <dynamic>[];
+    if (updatedItems.isNotEmpty) {
+      final byId = <int, Map<String, dynamic>>{};
+      for (final raw in updatedItems) {
+        if (raw is! Map) continue;
+        final map = raw.cast<String, dynamic>();
+        final id = int.tryParse('${map['id']}');
+        if (id != null) byId[id] = map;
+      }
+      json['items'] = current.items.map((item) {
+        final updated = byId[item.id];
+        if (updated == null) return item.toJson();
+        return <String, dynamic>{
+          ...item.toJson(),
+          'received_quantity': updated['received_quantity'],
+        };
+      }).toList();
+    }
+    if (result['fulfillment_status'] != null) {
+      json['fulfillment_status'] = result['fulfillment_status'];
+    }
+    orders[index] = LaundryOrder.fromJson(json);
+    notifyListeners();
   }
 
   /// اعتماد أو رفض الطلب.
