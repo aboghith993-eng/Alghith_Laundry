@@ -768,6 +768,34 @@ def api_sync_orders() -> Any:
     )
 
 
+def _delivery_items_state(db: Any, order_id: int) -> list[dict[str, Any]]:
+    """الكميات المستلمة والمتبقية لكل صنف بعد آخر عملية تسليم."""
+    return _rows_to_dicts(
+        db.execute(
+            "SELECT id, quantity, COALESCE(received_quantity, 0) AS received_quantity "
+            "FROM laundry_order_items WHERE order_id=? ORDER BY id",
+            (order_id,),
+        ).fetchall()
+    )
+
+
+def _delivery_ok(db: Any, order_id: int, message: str) -> Any:
+    items_after = _delivery_items_state(db, order_id)
+    remaining = sum(
+        max(float(item["quantity"] or 0) - float(item["received_quantity"] or 0), 0.0)
+        for item in items_after
+    )
+    return jsonify(
+        {
+            "ok": True,
+            "message": message,
+            "remaining": max(remaining, 0.0),
+            "fulfillment_status": "delivered",
+            "items": items_after,
+        }
+    )
+
+
 @bp.route("/api/orders/<int:order_id>/deliver", methods=["POST"])
 @api_roles_required("admin", "contractor")
 def api_deliver(order_id: int) -> Any:
@@ -785,7 +813,7 @@ def api_deliver(order_id: int) -> Any:
     if order["status"] == "rejected":
         return _json_error("لا يمكن تسجيل استلام لطلب مرفوض.", 400)
     items = db.execute(
-        "SELECT id, item_name, quantity, COALESCE(received_quantity, 0) AS received_quantity "
+        "SELECT id, service_item_id, item_name, quantity, COALESCE(received_quantity, 0) AS received_quantity "
         "FROM laundry_order_items WHERE order_id=? ORDER BY id",
         (order_id,),
     ).fetchall()
@@ -793,7 +821,8 @@ def api_deliver(order_id: int) -> Any:
         max(float(item["quantity"] or 0) - float(item["received_quantity"] or 0), 0.0) for item in items
     )
     if remaining_total <= 0:
-        return _json_error("تم استلام جميع القطع في هذا الطلب مسبقاً.", 409)
+        # تسليم مكرر بعد استلام كل القطع: عملية آمنة (idempotent) بلا خطأ.
+        return _delivery_ok(db, order_id, "تم استلام جميع القطع في هذا الطلب مسبقاً.")
     payload = request.get_json(silent=True) or {}
 
     # مستلم الأصناف من المغسلة: نفس الموظف المسجل في الطلب أو اسم آخر يُسجَّل.
@@ -813,27 +842,52 @@ def api_deliver(order_id: int) -> Any:
         for item in items
         if float(item["quantity"] or 0) - float(item["received_quantity"] or 0) > 0
     }
+    item_names = {int(item["id"]): item["item_name"] for item in items}
+    # يسمح التطبيق بإرسال معرّف صنف الخدمة أيضاً (للطلبات القديمة التي لا تحمل معرّفات بنود).
+    service_to_item = {
+        int(item["service_item_id"]): int(item["id"])
+        for item in items
+        if item["service_item_id"] is not None
+    }
     received_map: dict[int, float] = dict(remaining_map)
     if payload.get("pieces"):
         received_map = {}
         for piece in payload.get("pieces") or []:
             try:
-                piece_id = int(piece.get("id"))
                 piece_qty = float(piece.get("quantity"))
             except (TypeError, ValueError):
-                return _json_error("معرف الصنف أو الكمية المستلمة غير صحيحة.", 400)
+                return _json_error("الكمية المستلمة غير صحيحة.", 400)
+            candidates: list[int] = []
+            for raw_id in (piece.get("id"), piece.get("service_item_id")):
+                if raw_id in (None, ""):
+                    continue
+                try:
+                    candidates.append(int(raw_id))
+                except (TypeError, ValueError):
+                    continue
+            piece_id = next((cid for cid in candidates if cid in remaining_map), None)
+            if piece_id is None:
+                piece_id = next((cid for cid in candidates if cid in item_names), None)
+            if piece_id is None:
+                piece_id = next(
+                    (service_to_item.get(cid) for cid in candidates if service_to_item.get(cid) in item_names),
+                    None,
+                )
+            if piece_id is None:
+                return _json_error("قطعة غير تابعة لهذا الطلب.", 400)
             if piece_id not in remaining_map:
-                return _json_error(f"قطعة غير تابعة لهذا الطلب أو تم استلامها مسبقاً (المعرف {piece_id}).", 400)
+                # استُلمت هذه القطعة بالكامل مسبقاً — نتجاهلها بدل إظهار خطأ.
+                continue
             if piece_qty <= 0:
                 continue
             if piece_qty > remaining_map[piece_id] + 1e-9:
-                item_name = next((item["item_name"] for item in items if int(item["id"]) == piece_id), str(piece_id))
                 return _json_error(
-                    f"الكمية المستلمة للصنف {item_name} أكبر من المتبقي ({remaining_map[piece_id]:g}).", 400
+                    f"الكمية المستلمة للصنف {item_names[piece_id]} أكبر من المتبقي ({remaining_map[piece_id]:g}).",
+                    400,
                 )
             received_map[piece_id] = piece_qty
     if not received_map:
-        return _json_error("حدّد القطع التي تم استلامها من المغسلة مع الكميات.", 400)
+        return _delivery_ok(db, order_id, "تم استلام جميع القطع في هذا الطلب مسبقاً.")
 
     user = g.api_user
     receipt_row = db.execute(
@@ -867,7 +921,7 @@ def api_deliver(order_id: int) -> Any:
         if remaining_after > 0
         else "تم استلام جميع القطع النظيفة من المغسلة."
     )
-    return jsonify({"ok": True, "message": message, "remaining": max(remaining_after, 0)})
+    return _delivery_ok(db, order_id, message)
 
 
 @bp.route("/api/orders/<int:order_id>/confirm", methods=["POST"])
@@ -925,6 +979,119 @@ def api_delete_order(order_id: int) -> Any:
     )
     db.commit()
     return jsonify({"ok": True, "message": "تم حذف الطلب نهائياً."})
+
+
+@bp.route("/api/orders/<int:order_id>", methods=["PUT", "POST"])
+@api_roles_required("admin", "contractor")
+def api_update_order(order_id: int) -> Any:
+    """تعديل طلب لم تتم مراجعته ولم يبدأ تسليمه — يعيد حساب الإجمالي والبنود."""
+    from app import get_db, order_query, safe_date
+
+    db = get_db()
+    user = g.api_user
+    company_id = int(user["company_id"])
+    order = db.execute(
+        "SELECT * FROM laundry_orders WHERE id=? AND company_id=?", (order_id, company_id)
+    ).fetchone()
+    if not order:
+        return _json_error("الطلب غير موجود.", 404)
+    if order["status"] != "pending":
+        return _json_error("لا يمكن تعديل طلب تمت مراجعته.", 400)
+    if user["role"] == "contractor" and int(order["created_by"] or 0) != int(user["id"]):
+        return _json_error("يمكنك تعديل طلباتك التي لم تُعتمد فقط.", 403)
+    received = db.execute(
+        "SELECT COALESCE(SUM(COALESCE(received_quantity, 0)), 0) AS total "
+        "FROM laundry_order_items WHERE order_id=?",
+        (order_id,),
+    ).fetchone()
+    if float(received["total"] or 0) > 0:
+        return _json_error("لا يمكن تعديل طلب بدأ تسليمه. احذف الطلب وأنشئ طلباً جديداً.", 400)
+
+    payload = request.get_json(silent=True) or {}
+
+    employee = None
+    raw_employee_id = payload.get("employee_id")
+    if raw_employee_id not in (None, ""):
+        try:
+            employee_id_value = int(raw_employee_id)
+        except (TypeError, ValueError):
+            employee_id_value = 0
+        if employee_id_value > 0:
+            employee = db.execute(
+                "SELECT * FROM employees WHERE id=? AND company_id=? AND active=1",
+                (employee_id_value, company_id),
+            ).fetchone()
+    if not employee:
+        employee_code = _normalize_code(payload.get("employee_code"))
+        if employee_code:
+            employee = db.execute(
+                "SELECT * FROM employees WHERE company_id=? AND active=1 AND employee_code=?",
+                (company_id, employee_code),
+            ).fetchone()
+    if not employee:
+        return _json_error("اختر موظفاً فعالاً من قاعدة البيانات.", 400)
+    employee_id = int(employee["id"])
+
+    service_date = safe_date(str(payload.get("service_date", "")), "")
+    if not service_date:
+        return _json_error("أدخل تاريخ الخدمة بشكل صحيح.", 400)
+
+    person_name = str(payload.get("person_name", "")).strip()
+    if employee["person_type"] == "general" and not person_name:
+        return _json_error("للسجل العام، اكتب اسم الزائر أو الضيف الفعلي.", 400)
+
+    notes = str(payload.get("notes", "")).strip()
+    lines = payload.get("items") or []
+    line_data: list[tuple[Any, float]] = []
+    for line in lines:
+        try:
+            qty = float(line.get("quantity"))
+            item_id = int(line.get("service_item_id"))
+        except (ValueError, TypeError):
+            return _json_error("أحد الأصناف أو الكميات غير صحيح.", 400)
+        item = db.execute(
+            "SELECT * FROM service_items WHERE id=? AND company_id=? AND active=1",
+            (item_id, company_id),
+        ).fetchone()
+        if not item or qty <= 0:
+            return _json_error(
+                "تحقق من الصنف والكمية؛ الكمية يجب أن تكون أكبر من صفر.", 400
+            )
+        line_data.append((item, qty))
+    if not line_data:
+        return _json_error("أضف صنفاً واحداً على الأقل للطلب.", 400)
+
+    subtotal = sum(float(item["rate"]) * qty for item, qty in line_data)
+    try:
+        db.execute(
+            "UPDATE laundry_orders SET employee_id=?,person_name=?,service_date=?,notes=?,subtotal=? "
+            "WHERE id=? AND company_id=?",
+            (employee_id, person_name, service_date, notes, subtotal, order_id, company_id),
+        )
+        db.execute("DELETE FROM laundry_order_items WHERE order_id=?", (order_id,))
+        for item, qty in line_data:
+            rate = float(item["rate"])
+            db.execute(
+                "INSERT INTO laundry_order_items(order_id,service_item_id,item_name,unit,quantity,unit_price,line_total) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (order_id, item["id"], item["name"], item["unit"], qty, rate, rate * qty),
+            )
+        db.commit()
+    except (sqlite3.Error, psycopg.Error) as exc:
+        db.rollback()
+        return _json_error(f"تعذر حفظ التعديل: {exc}", 400)
+
+    rows = order_query("o.id=?", (order_id,))
+    row = _order_payload(rows[0]) if rows else None
+    return jsonify(
+        {
+            "ok": True,
+            "message": "تم تعديل الطلب.",
+            "order_id": order_id,
+            "subtotal": subtotal,
+            "order": row,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1121,17 +1288,24 @@ def api_service_item_create() -> Any:
             "تعذرت الإضافة. تأكد من الاسم والرمز وأن السعر رقم غير سالب والرمز غير مكرر.", 400
         )
     try:
-        db.execute(
-            "INSERT INTO service_items(company_id,code,name,unit,rate) VALUES(?,?,?,?,?)",
+        cursor = db.execute(
+            "INSERT INTO service_items(company_id,code,name,unit,rate) VALUES(?,?,?,?,?) RETURNING id",
             (int(g.api_user["company_id"]), code, name, unit, rate),
         )
+        new_id = cursor.fetchone()["id"]
         db.commit()
     except (sqlite3.IntegrityError, psycopg.IntegrityError):
         db.rollback()
         return _json_error(
             "تعذرت الإضافة. تأكد من الاسم والرمز وأن السعر رقم غير سالب والرمز غير مكرر.", 400
         )
-    return jsonify({"ok": True, "message": "تمت إضافة الخدمة والسعر."})
+    row = db.execute("SELECT * FROM service_items WHERE id=?", (new_id,)).fetchone()
+    item = _rows_to_dicts([row])[0] if row else None
+    if item:
+        item["active"] = _bool(item.get("active"))
+    return jsonify(
+        {"ok": True, "message": "تمت إضافة الخدمة والسعر.", "service_item": item}
+    )
 
 
 @bp.route("/api/service-items/<int:item_id>", methods=["POST", "PUT"])
@@ -1155,15 +1329,39 @@ def api_service_item_update(item_id: int) -> Any:
         rate = -1
     if not name or rate < 0:
         return _json_error("أدخل اسماً وسعراً صحيحاً غير سالب.", 400)
-    db.execute(
-        "UPDATE service_items SET name=?,unit=?,rate=? WHERE id=? AND company_id=?",
-        (name, unit, rate, item_id, company_id),
-    )
-    db.commit()
+    code = str(payload.get("code", "")).strip().upper().replace(" ", "_")
+    active = payload.get("active")
+    try:
+        if code:
+            db.execute(
+                "UPDATE service_items SET code=?,name=?,unit=?,rate=? WHERE id=? AND company_id=?",
+                (code, name, unit, rate, item_id, company_id),
+            )
+        else:
+            db.execute(
+                "UPDATE service_items SET name=?,unit=?,rate=? WHERE id=? AND company_id=?",
+                (name, unit, rate, item_id, company_id),
+            )
+        if active is not None:
+            db.execute(
+                "UPDATE service_items SET active=? WHERE id=? AND company_id=?",
+                (1 if active else 0, item_id, company_id),
+            )
+        db.commit()
+    except (sqlite3.IntegrityError, psycopg.IntegrityError):
+        db.rollback()
+        return _json_error("الرمز مستخدم لخدمة أخرى في نفس الشركة.", 400)
+    row = db.execute(
+        "SELECT * FROM service_items WHERE id=? AND company_id=?", (item_id, company_id)
+    ).fetchone()
+    item = _rows_to_dicts([row])[0] if row else None
+    if item:
+        item["active"] = _bool(item.get("active"))
     return jsonify(
         {
             "ok": True,
             "message": "تم حفظ السعر. الطلبات السابقة تحتفظ بالسعر المسجل وقت إنشائها.",
+            "service_item": item,
         }
     )
 

@@ -27,10 +27,9 @@ function showLogin() {
       if (server) $("#login-server").value = server;
     } catch { /* ignore */ }
   }
-  // إظهار حقل الخادم فقط لمدير النظام أو إذا لم يتم ضبط خادم افتراضي
-  const showServer = lastUser === "admin" || !hasServerUrl();
-  if ($("#field-server")) $("#field-server").classList.toggle("hidden", !showServer);
-  if ($("#row-server-test")) $("#row-server-test").classList.toggle("hidden", !showServer);
+  // عنوان الخادم لا يظهر في شاشة الدخول إطلاقاً؛ يُضبط من إعدادات مدير النظام فقط.
+  if ($("#field-server")) $("#field-server").classList.add("hidden");
+  if ($("#row-server-test")) $("#row-server-test").classList.add("hidden");
   if (lastUser && hasLocalPin(lastUser)) $("#pin-form").classList.remove("hidden");
   updateOfflineHint();
   updateServerStatus();
@@ -45,7 +44,7 @@ function updateOfflineHint() {
   const lastUser = localStorage.getItem("ln_last_user") || "";
   const parts = [];
   if (!hasServerUrl()) {
-    parts.push("اضبط عنوان الخادم أولاً (مطلوب في تطبيق الهاتف).");
+    parts.push("لم يُضبط عنوان الخادم على هذا الجهاز بعد — تواصل مع مدير النظام لضبطه من إعداداته.");
   } else if (!isOnline()) {
     parts.push("أنت غير متصل بالإنترنت.");
   }
@@ -102,7 +101,7 @@ async function doLogin(event) {
     return;
   }
   if (!hasServerUrl()) {
-    errorBox.textContent = "اضبط عنوان الخادم أولاً — بدونه لا يمكن تسجيل الدخول أو المزامنة.";
+    errorBox.textContent = "لم يُضبط عنوان الخادم على هذا الجهاز. يضبطه مدير النظام من إعداداته.";
     errorBox.classList.remove("hidden");
     return;
   }
@@ -126,7 +125,7 @@ async function doLogin(event) {
   if (result.code === "unauthorized") {
     errorBox.textContent = "اسم المستخدم أو كلمة المرور غير صحيحة.";
   } else if (result.code === "no_server") {
-    errorBox.textContent = "لم يتم ضبط عنوان الخادم. اكتب عنوان النظام ثم أعد المحاولة.";
+    errorBox.textContent = "لم يُضبط عنوان الخادم على هذا الجهاز. يضبطه مدير النظام من إعداداته.";
   } else if (result.code === "timeout") {
     errorBox.textContent = "الخادم لا يستجيب. تحقّق من العنوان، أو استخدم الرمز المحلي إن وُجد.";
   } else {
@@ -166,7 +165,7 @@ async function doPinLogin(event) {
     showApp();
     setPage("home");
     toast("تم الفتح بالرمز المحلي (دون اتصال). ستتم المزامنة تلقائياً عند عودة الاتصال.", "warn");
-    // إن توفّرت الرموز فالمو gloves الجلسة صالحة للمزامنة — نبدأها فوراً.
+    // إن توفّرت الرموز فالجلسة صالحة للمزامنة — نبدأها فوراً.
     if (isOnlineSession() && isOnline()) syncEverything().then(() => render());
     return;
   }
@@ -202,9 +201,8 @@ function bindGlobal() {
 
   $("#login-username").addEventListener("input", () => {
     const u = $("#login-username").value.trim();
-    const showServer = u === "admin" || !hasServerUrl();
-    if ($("#field-server")) $("#field-server").classList.toggle("hidden", !showServer);
-    if ($("#row-server-test")) $("#row-server-test").classList.toggle("hidden", !showServer);
+    if ($("#field-server")) $("#field-server").classList.add("hidden");
+    if ($("#row-server-test")) $("#row-server-test").classList.add("hidden");
     if (u && hasLocalPin(u)) $("#pin-form").classList.remove("hidden");
     else $("#pin-form").classList.add("hidden");
   });
@@ -240,13 +238,10 @@ function bindGlobal() {
       return;
     }
     if (e.target.closest("#btn-logout")) {
-      // قفل التطبيق — يبقى الرموز للمزامنة لاحقاً عند عودة الاتصال أو بالرمز المحلي.
+      // قفل محلي فقط: لا تمسح الجلسة المحفوظة أو رموزها أو البيانات غير المتزامنة.
+      // lockApp يفعّل شاشة القفل، وunlockWithLocalPin يستعيد الجلسة عند إدخال الرمز.
+      // تبقى ln_queue وln_orders وln_actions وsnapshot محفوظة للمزامنة لاحقاً.
       lockApp();
-      clearSession();
-      localStorage.removeItem("ln_queue");
-      localStorage.removeItem("ln_orders");
-      // لا نحذف الجلسة/الرموز هنا؛ lockApp يحافظ عليها.
-      // إعادة تحميل لفرض شاشة الدخول مع خيار الرمز المحلي.
       location.reload();
     }
   });

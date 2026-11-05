@@ -8,6 +8,7 @@ const KEY_ORDERS = "ln_orders";
 const KEY_CONFIG = "ln_config";
 const KEY_PIN = "ln_pin";
 const KEY_ACTIONS = "ln_actions";
+const KEY_SERVICE_ACTIONS = "ln_service_actions";
 const KEY_IDENTITY = "ln_identity";
 const KEY_LOCK = "ln_locked";
 
@@ -21,6 +22,7 @@ export const state = {
   queue: [],
   orders: [],
   actions: [],
+  serviceActions: [],
   config: { server_url: "" },
   online: typeof navigator !== "undefined" ? navigator.onLine : true,
   syncing: false,
@@ -58,6 +60,7 @@ export function loadSession() {
   state.queue = load(KEY_QUEUE, []);
   state.orders = load(KEY_ORDERS, []);
   state.actions = load(KEY_ACTIONS, []);
+  state.serviceActions = load(KEY_SERVICE_ACTIONS, []);
   state.snapshot = load(KEY_SNAPSHOT, null);
   return state.session;
 }
@@ -357,6 +360,64 @@ export function snapshotMeta() {
   return s ? { built_at: s.built_at, counts: s.counts } : null;
 }
 
+/* ---------- المستخدمون (مدير النظام) ---------- */
+
+export function snapshotUsers() {
+  const list = state.snapshot && Array.isArray(state.snapshot.users) ? state.snapshot.users : [];
+  return list.slice();
+}
+
+function storeUsers(users) {
+  if (!state.snapshot) return;
+  state.snapshot.users = users;
+  persistSnapshot();
+}
+
+export async function fetchUsers() {
+  if (!isOnline()) {
+    return { ok: false, code: "offline", error: "إدارة المستخدمين تتطلب اتصالاً بالإنترنت." };
+  }
+  const res = await apiRequest("/api/users");
+  if (res.ok && res.data && Array.isArray(res.data.users)) {
+    const users = res.data.users.map((u) => ({ ...u, active: !!u.active }));
+    storeUsers(users);
+    return { ok: true, users };
+  }
+  return { ok: false, error: res.data?.error || res.error || `تعذر تحميل المستخدمين (${res.status}).` };
+}
+
+async function userMutation(path, options) {
+  if (!isOnline()) {
+    return { ok: false, code: "offline", error: "إدارة المستخدمين تتطلب اتصالاً بالإنترنت." };
+  }
+  const res = await apiRequest(path, options);
+  if (res.ok) {
+    await fetchUsers();
+    return { ok: true, message: (res.data && res.data.message) || "تم الحفظ." };
+  }
+  return { ok: false, error: res.data?.error || res.error || `تعذر تنفيذ العملية (${res.status}).` };
+}
+
+export function createUser(payload) {
+  return userMutation("/api/users", { method: "POST", body: payload });
+}
+
+export function updateUser(id, payload) {
+  return userMutation(`/api/users/${id}`, { method: "PUT", body: payload });
+}
+
+export function toggleUser(id) {
+  return userMutation(`/api/users/${id}/toggle`, { method: "POST", body: {} });
+}
+
+export function deleteUser(id) {
+  return userMutation(`/api/users/${id}`, { method: "DELETE" });
+}
+
+export function resetUserPassword(id, password) {
+  return userMutation(`/api/users/${id}/reset`, { method: "POST", body: { password } });
+}
+
 export async function syncSnapshotFromServer() {
   const res = await apiRequest("/api/mobile/snapshot", { auth: true });
   if (!res.ok) {
@@ -392,8 +453,42 @@ export function findEmployeesByName(text) {
 }
 
 export function serviceItems() {
-  const s = state.snapshot;
-  return s ? s.service_items || [] : [];
+  const base = (state.snapshot && Array.isArray(state.snapshot.service_items)
+    ? state.snapshot.service_items
+    : []).map((item) => ({ ...item }));
+  let items = base;
+  for (const action of state.serviceActions || []) {
+    if (action.type === "service_create") {
+      items = [
+        ...items,
+        {
+          id: action.temp_id,
+          code: action.payload.code,
+          name: action.payload.name,
+          unit: action.payload.unit || "قطعة",
+          rate: Number(action.payload.rate || 0),
+          active: true,
+          _local: true,
+        },
+      ];
+    } else if (action.type === "service_update") {
+      items = items.map((item) => (String(item.id) === String(action.item_id)
+        ? { ...item, ...action.payload, active: action.payload.active ?? item.active ?? true, _local: true }
+        : item));
+    } else if (action.type === "service_toggle") {
+      items = items.map((item) => (String(item.id) === String(action.item_id)
+        ? { ...item, active: !!action.payload.active, _local: true }
+        : item));
+    } else if (action.type === "service_delete") {
+      items = items.filter((item) => String(item.id) !== String(action.item_id));
+    }
+  }
+  return items;
+}
+
+/* الأصناف المفعّلة فقط — تُستخدم في شاشة إنشاء طلب جديد. */
+export function activeServiceItems() {
+  return serviceItems().filter((item) => item.active !== false);
 }
 
 export function settings() {
@@ -419,6 +514,15 @@ export function getOrderByUuid(clientUuid) {
   return state.orders.find((o) => o.client_uuid === clientUuid) || null;
 }
 
+/* حذف طلب من الجهاز (يُستخدم للطلبات المحلية أو بعد حذفها من الخادم). */
+export function deleteLocalOrder(clientUuid) {
+  state.orders = state.orders.filter((o) => o.client_uuid !== clientUuid);
+  save(KEY_ORDERS, state.orders);
+  state.actions = state.actions.filter((a) => a.client_uuid !== clientUuid);
+  save(KEY_ACTIONS, state.actions);
+  return state.orders.length;
+}
+
 /* ---------- طابور المزامنة ---------- */
 
 export function getQueue() {
@@ -426,7 +530,7 @@ export function getQueue() {
 }
 
 export function enqueueOrder(order) {
-  state.queue.push({
+  const entry = {
     client_uuid: order.client_uuid,
     employee_id: order.employee_id || null,
     employee_code: order.employee_code,
@@ -436,7 +540,10 @@ export function enqueueOrder(order) {
     items: order.items,
     created_at: order.created_at,
     queued_at: new Date().toISOString(),
-  });
+  };
+  const idx = state.queue.findIndex((o) => o.client_uuid === order.client_uuid);
+  if (idx >= 0) state.queue[idx] = entry;
+  else state.queue.push(entry);
   save(KEY_QUEUE, state.queue);
   return state.queue.length;
 }
@@ -489,6 +596,10 @@ export async function syncOrders() {
       if (result.status === "created" || result.status === "duplicate") {
         dequeueOrder(result.client_uuid);
         pushed += 1;
+        // الخادم يعيد رقم الطلب فقط — نجلب تفاصيل الأصناف لتصبح معرّفاتها جاهزة للتسليم الجزئي.
+        if (result.order_id) {
+          await refreshOrderFromServer(result.order_id, result.client_uuid);
+        }
       } else {
         failed += 1;
       }
@@ -503,8 +614,9 @@ export async function syncOrders() {
 
 export async function syncEverything() {
   const snap = await syncSnapshotFromServer();
-  const orders = await syncOrders();
+  // الخدمات والإجراءات أولاً (لتحويل المعرّفات المؤقتة) ثم دفع الطلبات الجديدة.
   const actions = await syncActions();
+  const orders = await syncOrders();
   const history = await fetchServerOrders();
   return { snapshot: snap, orders, actions, history };
 }
@@ -516,9 +628,13 @@ function normalizeServerItems(lines) {
   const out = {};
   for (const line of lines || []) {
     out[line.service_item_id] = {
+      id: line.id,
+      service_item_id: line.service_item_id,
       quantity: Number(line.quantity || 0),
       unit_price: Number(line.unit_price || 0),
       item_name: line.item_name || "",
+      unit: line.unit || "",
+      received_quantity: Number(line.received_quantity || 0),
     };
   }
   return out;
@@ -542,6 +658,8 @@ function normalizeServerOrder(row) {
     delivered_at: row.delivered_at || "",
     confirmed_at: row.confirmed_at || "",
     rejection_reason: row.rejection_reason || "",
+    receiver_kind: row.receiver_kind || "",
+    receiver_name: row.receiver_name || "",
     creator_name: row.creator_name || "",
     confirmer_name: row.confirmer_name || "",
     deliverer_name: row.deliverer_name || "",
@@ -555,18 +673,27 @@ function mergeServerOrders(list) {
   for (const incoming of list) {
     const idx = state.orders.findIndex((o) => o.client_uuid === incoming.client_uuid);
     if (idx >= 0) {
-      // الطلب المحلي موجود: نحدّث حالة الخادم مع الحفاظ على الأصناف المحلية.
+      // الطلب المحلي موجود: نحدّث حالة الخادم مع الحفاظ على تفاصيل الأصناف المحلية
+      // وندمج الكميات المستلمة القادمة من الخادم (للتسليم الجزئي).
+      const local = state.orders[idx];
+      const mergedItems = { ...(local.items || {}) };
+      for (const [itemId, line] of Object.entries(incoming.items || {})) {
+        const existing = mergedItems[itemId];
+        mergedItems[itemId] = existing
+          ? {
+            ...existing,
+            id: line.id ?? existing.id,
+            received_quantity: line.received_quantity ?? existing.received_quantity ?? 0,
+            item_name: existing.item_name || line.item_name || "",
+            unit: existing.unit || line.unit || "",
+          }
+          : line;
+      }
       state.orders[idx] = {
-        ...state.orders[idx],
-        server_id: incoming.server_id,
-        reference: incoming.reference,
-        status: incoming.status,
-        fulfillment_status: incoming.fulfillment_status,
-        delivered_at: incoming.delivered_at,
-        confirmed_at: incoming.confirmed_at,
-        rejection_reason: incoming.rejection_reason,
-        subtotal: incoming.subtotal,
-        sync_state: state.orders[idx].sync_state === "pending" ? "pending" : "synced",
+        ...local,
+        ...incoming,
+        items: mergedItems,
+        sync_state: local.sync_state === "pending" ? "pending" : "synced",
       };
     } else {
       state.orders.unshift(incoming);
@@ -593,17 +720,73 @@ export async function fetchServerOrders(params = {}) {
   return { ok: false, error: res.error || `تعذر تحميل الطلبات (${res.status}).` };
 }
 
-/* ---------- طابور الإجراءات (تسليم/اعتماد) دون اتصال ---------- */
+/* ---------- طابور الإجراءات (تسليم/اعتماد/تعديل/حذف/خدمات) دون اتصال ---------- */
 
 export function pendingActions() {
   return state.actions;
 }
 
-export function pendingActionCount() {
-  return state.actions.length;
+export function pendingServiceActions() {
+  return state.serviceActions;
 }
 
-export function queueAction(type, order, payload = {}) {
+export function pendingActionCount() {
+  return state.actions.length + (state.serviceActions || []).length;
+}
+
+export function pendingServiceCount() {
+  return (state.serviceActions || []).length;
+}
+
+function nextTempServiceId() {
+  let candidate = -1;
+  const used = new Set(serviceItems().map((item) => String(item.id)));
+  for (const action of state.serviceActions || []) {
+    if (action.temp_id != null) used.add(String(action.temp_id));
+  }
+  while (used.has(String(candidate))) candidate -= 1;
+  return candidate;
+}
+
+/* إضافة/تعديل/تعطيل/حذف خدمة وسعر — تُطبَّق محلياً فوراً وتُزامن لاحقاً. */
+export function queueServiceAction(type, payload = {}, itemId = null) {
+  const action = {
+    action_id: uuid(),
+    type,
+    item_id: itemId == null ? null : itemId,
+    payload: { ...payload },
+    created_at: new Date().toISOString(),
+  };
+  if (type === "service_create") {
+    action.temp_id = nextTempServiceId();
+    action.item_id = action.temp_id;
+  }
+  state.serviceActions.push(action);
+  save(KEY_SERVICE_ACTIONS, state.serviceActions);
+  return action;
+}
+
+function snapshotOrderForAction(order) {
+  return {
+    status: order.status,
+    fulfillment_status: order.fulfillment_status,
+    delivered_at: order.delivered_at,
+    confirmed_at: order.confirmed_at,
+    rejection_reason: order.rejection_reason,
+    receiver_kind: order.receiver_kind,
+    receiver_name: order.receiver_name,
+    subtotal: order.subtotal,
+    notes: order.notes,
+    person_name: order.person_name,
+    service_date: order.service_date,
+    employee_id: order.employee_id,
+    employee_code: order.employee_code,
+    employee_name: order.employee_name,
+    items: JSON.parse(JSON.stringify(order.items || {})),
+  };
+}
+
+export function queueAction(type, order, payload = {}, localPatch = {}) {
   if (!order || !order.server_id) return null;
   const action = {
     action_id: uuid(),
@@ -611,56 +794,370 @@ export function queueAction(type, order, payload = {}) {
     order_id: order.server_id,
     client_uuid: order.client_uuid || "",
     payload,
+    localPatch,
+    before: snapshotOrderForAction(order),
     created_at: new Date().toISOString(),
   };
   state.actions.push(action);
   save(KEY_ACTIONS, state.actions);
+  if (type === "delete") {
+    // حذف متفائل: يختفي الطلب من الواجهة فوراً، ويبقى الإجراء في الطابور للإرسال.
+    state.orders = state.orders.filter((o) => o.client_uuid !== order.client_uuid);
+    save(KEY_ORDERS, state.orders);
+  } else {
+    applyActionLocally(action);
+  }
   return action;
 }
 
-function applyActionLocally(action) {
-  const order = state.orders.find(
+function findOrderForAction(action) {
+  return state.orders.find(
     (o) => (action.client_uuid && o.client_uuid === action.client_uuid) || o.server_id === action.order_id
   );
+}
+
+function applyActionLocally(action) {
+  const order = findOrderForAction(action);
   if (!order) return;
   if (action.type === "deliver") {
+    const pieces = Array.isArray(action.payload.pieces) ? action.payload.pieces : [];
+    const items = { ...(order.items || {}) };
+    let matched = 0;
+    if (pieces.length) {
+      for (const piece of pieces) {
+        const entry = Object.entries(items).find(([key, line]) => (
+          (line.id != null && piece.id != null && String(line.id) === String(piece.id))
+          || (piece.service_item_id != null && String(key) === String(piece.service_item_id))
+          || (piece.id != null && String(key) === String(piece.id))
+        ));
+        if (!entry) continue;
+        matched += 1;
+        const [key, line] = entry;
+        items[key] = {
+          ...line,
+          received_quantity: Math.min(
+            Number(line.quantity || 0),
+            Number(line.received_quantity || 0) + Number(piece.quantity || 0)
+          ),
+        };
+      }
+      // لا نُطبّق مستلماً أو حالة تسليم إن لم تتطابق أي قطعة — حتى لا تظهر بيانات وهمية.
+      if (!matched) return;
+    } else {
+      for (const [key, line] of Object.entries(items)) {
+        items[key] = { ...line, received_quantity: Number(line.quantity || 0) };
+      }
+    }
+    order.items = items;
     order.fulfillment_status = "delivered";
-    order.delivered_at = new Date().toISOString();
-  } else {
+    order.delivered_at = order.delivered_at || new Date().toISOString();
+    order.receiver_kind = action.payload.receiver_kind || "same_employee";
+    order.receiver_name = action.payload.receiver_name || order.receiver_name || "";
+  } else if (action.type === "confirm") {
     order.status = action.payload.decision || "approved";
     order.confirmed_at = new Date().toISOString();
     if (action.payload.rejection_reason) order.rejection_reason = action.payload.rejection_reason;
+    else if (action.payload.decision === "approved") order.rejection_reason = "";
+  } else if (action.type === "update") {
+    Object.assign(order, action.localPatch || {});
   }
   saveLocalOrder(order);
 }
 
-export async function syncActions() {
-  if (!state.actions.length) return { applied: 0, failed: 0 };
-  if (!isOnline()) return { applied: 0, failed: 0, error: "لا يوجد اتصال بالإنترنت." };
-  let applied = 0;
-  let failed = 0;
-  const remaining = [];
-  for (const action of state.actions) {
-    const path = action.type === "deliver"
-      ? `/api/orders/${action.order_id}/deliver`
-      : `/api/orders/${action.order_id}/confirm`;
-    const res = await apiRequest(path, { method: "POST", body: action.payload });
-    if (res.ok) {
-      applied += 1;
-      applyActionLocally(action);
-    } else {
-      failed += 1;
-      action.last_error = res.data?.error || res.error || `status=${res.status}`;
-      remaining.push(action);
-    }
-  }
-  state.actions = remaining;
-  save(KEY_ACTIONS, state.actions);
-  return { applied, failed };
+function revertActionLocally(action) {
+  if (!action.before) return;
+  const order = findOrderForAction(action);
+  if (!order) return;
+  const snapshot = action.before;
+  order.status = snapshot.status;
+  order.fulfillment_status = snapshot.fulfillment_status;
+  order.delivered_at = snapshot.delivered_at;
+  order.confirmed_at = snapshot.confirmed_at;
+  order.rejection_reason = snapshot.rejection_reason;
+  order.receiver_kind = snapshot.receiver_kind;
+  order.receiver_name = snapshot.receiver_name;
+  order.subtotal = snapshot.subtotal;
+  order.notes = snapshot.notes;
+  order.person_name = snapshot.person_name;
+  order.service_date = snapshot.service_date;
+  order.employee_id = snapshot.employee_id;
+  order.employee_code = snapshot.employee_code;
+  order.employee_name = snapshot.employee_name;
+  order.items = JSON.parse(JSON.stringify(snapshot.items || {}));
+  saveLocalOrder(order);
 }
 
-export function autoSync() {
-  if (!isOnline() || !isOnlineSession()) return;
-  if (state.queue.length === 0 && state.actions.length === 0 && state.snapshot) return;
-  syncEverything();
+/* جلب أحدث نسخة للطلب من الخادم ودمجها محلياً (لتصحيح المعرّفات والكميات المستلمة). */
+export async function refreshOrderFromServer(orderId, clientUuid = "") {
+  if (!orderId) return null;
+  const res = await apiRequest(`/api/orders/${orderId}`);
+  if (!res.ok || !res.data?.order) return null;
+  const incoming = normalizeServerOrder(res.data.order);
+  const idx = state.orders.findIndex((o) => (
+    (clientUuid && o.client_uuid === clientUuid)
+    || o.server_id === orderId
+    || o.client_uuid === incoming.client_uuid
+  ));
+  if (idx >= 0) {
+    const local = state.orders[idx];
+    state.orders[idx] = {
+      ...local,
+      ...incoming,
+      client_uuid: local.client_uuid,
+      sync_state: local.sync_state === "pending" ? "pending" : "synced",
+    };
+    save(KEY_ORDERS, state.orders);
+    return state.orders[idx];
+  }
+  state.orders.unshift(incoming);
+  save(KEY_ORDERS, state.orders);
+  return incoming;
+}
+
+/* تحديث الطلب المحلي من استجابة الخادم (بعد التعديل). */
+function replaceLocalOrderFromServer(clientUuid, row) {
+  if (!row) return;
+  const incoming = normalizeServerOrder(row);
+  const idx = state.orders.findIndex((o) => o.client_uuid === clientUuid);
+  if (idx >= 0) {
+    state.orders[idx] = {
+      ...state.orders[idx],
+      ...incoming,
+      client_uuid: state.orders[idx].client_uuid,
+      sync_state: "synced",
+    };
+    save(KEY_ORDERS, state.orders);
+  }
+}
+
+function updateLocalItemsFromServer(order, serverItems) {
+  if (!order || !Array.isArray(serverItems)) return;
+  const items = { ...(order.items || {}) };
+  for (const line of serverItems) {
+    const entry = Object.entries(items).find(([key, local]) => (
+      (line.id != null && local.id != null && String(local.id) === String(line.id))
+      || (line.service_item_id != null && String(key) === String(line.service_item_id))
+    ));
+    if (entry) {
+      const [key, local] = entry;
+      items[key] = {
+        ...local,
+        id: line.id ?? local.id,
+        received_quantity: Number(line.received_quantity || 0),
+      };
+    }
+  }
+  order.items = items;
+  saveLocalOrder(order);
+}
+
+function persistSnapshot() {
+  if (state.snapshot) save(KEY_SNAPSHOT, state.snapshot);
+}
+
+function upsertSnapshotService(serverItem) {
+  if (!serverItem || !state.snapshot) return;
+  const list = Array.isArray(state.snapshot.service_items) ? state.snapshot.service_items : [];
+  const idx = list.findIndex((item) => String(item.id) === String(serverItem.id));
+  if (idx >= 0) list[idx] = serverItem;
+  else list.push(serverItem);
+  state.snapshot.service_items = list;
+  persistSnapshot();
+}
+
+function setSnapshotServiceActive(itemId, active) {
+  if (!state.snapshot || !Array.isArray(state.snapshot.service_items)) return;
+  state.snapshot.service_items = state.snapshot.service_items.map((item) => (
+    String(item.id) === String(itemId) ? { ...item, active: !!active } : item
+  ));
+  persistSnapshot();
+}
+
+function removeSnapshotService(itemId) {
+  if (!state.snapshot || !Array.isArray(state.snapshot.service_items)) return;
+  state.snapshot.service_items = state.snapshot.service_items.filter(
+    (item) => String(item.id) !== String(itemId)
+  );
+  persistSnapshot();
+}
+
+/* استبدال المعرّف المؤقت للخدمة بمعرّف الخادم في كل البيانات المحلية والطوابير. */
+function mapTempService(tempId, serverItem) {
+  if (!serverItem) return;
+  if (state.snapshot && Array.isArray(state.snapshot.service_items)) {
+    state.snapshot.service_items = state.snapshot.service_items.filter(
+      (item) => String(item.id) !== String(tempId)
+    );
+    upsertSnapshotService(serverItem);
+  }
+  for (const order of state.orders) {
+    if (order.items && order.items[tempId] != null) {
+      order.items[serverItem.id] = { ...order.items[tempId], service_item_id: serverItem.id };
+      delete order.items[tempId];
+    }
+  }
+  save(KEY_ORDERS, state.orders);
+  for (const queued of state.queue) {
+    if (queued.items && queued.items[tempId] != null) {
+      queued.items[serverItem.id] = { ...queued.items[tempId], service_item_id: serverItem.id };
+      delete queued.items[tempId];
+    }
+  }
+  save(KEY_QUEUE, state.queue);
+  for (const action of state.serviceActions) {
+    if (String(action.item_id) === String(tempId)) action.item_id = serverItem.id;
+  }
+  for (const action of state.actions) {
+    if (action.payload && Array.isArray(action.payload.items)) {
+      action.payload.items = action.payload.items.map((line) => (
+        String(line.service_item_id) === String(tempId)
+          ? { ...line, service_item_id: serverItem.id }
+          : line
+      ));
+    }
+    if (action.localPatch && action.localPatch.items && action.localPatch.items[tempId] != null) {
+      action.localPatch.items[serverItem.id] = {
+        ...action.localPatch.items[tempId],
+        service_item_id: serverItem.id,
+      };
+      delete action.localPatch.items[tempId];
+    }
+  }
+  save(KEY_ACTIONS, state.actions);
+  save(KEY_SERVICE_ACTIONS, state.serviceActions);
+}
+
+function isClientError(status) {
+  return status >= 400 && status < 500 && status !== 401 && status !== 403;
+}
+
+export async function syncActions() {
+  const hasService = (state.serviceActions || []).length > 0;
+  const hasOrder = state.actions.length > 0;
+  if (!hasService && !hasOrder) return { applied: 0, failed: 0 };
+  if (!isOnline()) return { applied: 0, failed: 0, offline: true };
+
+  let applied = 0;
+  let failed = 0;
+  const errors = [];
+
+  /* الخدمات أولاً حتى تتوفر معرّفات الخادم قبل إرسال الطلبات التي تستخدمها. */
+  if (hasService) {
+    const remainingService = [];
+    for (const action of state.serviceActions.slice()) {
+      let res;
+      if (action.type === "service_create") {
+        res = await apiRequest("/api/service-items", {
+          method: "POST",
+          body: {
+            code: action.payload.code,
+            name: action.payload.name,
+            unit: action.payload.unit,
+            rate: action.payload.rate,
+          },
+        });
+      } else {
+        const itemId = action.item_id;
+        if (itemId == null || Number(itemId) < 0) {
+          remainingService.push(action);
+          continue;
+        }
+        if (action.type === "service_update") {
+          res = await apiRequest(`/api/service-items/${itemId}`, { method: "PUT", body: action.payload });
+        } else if (action.type === "service_toggle") {
+          res = await apiRequest(`/api/service-items/${itemId}/toggle`, { method: "POST", body: {} });
+        } else if (action.type === "service_delete") {
+          res = await apiRequest(`/api/service-items/${itemId}`, { method: "DELETE" });
+        } else {
+          remainingService.push(action);
+          continue;
+        }
+      }
+      if (res.ok) {
+        applied += 1;
+        if (action.type === "service_create") {
+          mapTempService(action.temp_id, res.data?.service_item);
+        } else if (action.type === "service_update") {
+          upsertSnapshotService(res.data?.service_item);
+        } else if (action.type === "service_toggle") {
+          setSnapshotServiceActive(action.item_id, action.payload.active);
+        } else if (action.type === "service_delete") {
+          removeSnapshotService(action.item_id);
+        }
+      } else if (isClientError(res.status) && !(action.type === "service_delete" && res.status === 404)) {
+        failed += 1;
+        errors.push(res.data?.error || res.error || `تعذر تنفيذ إجراء على الخدمة (${res.status}).`);
+      } else {
+        if (action.type === "service_delete" && res.status === 404) {
+          applied += 1;
+          removeSnapshotService(action.item_id);
+        } else {
+          failed += 1;
+          action.last_error = res.data?.error || res.error || `status=${res.status}`;
+          remainingService.push(action);
+        }
+      }
+    }
+    state.serviceActions = remainingService;
+    save(KEY_SERVICE_ACTIONS, state.serviceActions);
+  }
+
+  if (hasOrder) {
+    const remaining = [];
+    for (const action of state.actions.slice()) {
+      let res;
+      if (action.type === "deliver") {
+        res = await apiRequest(`/api/orders/${action.order_id}/deliver`, { method: "POST", body: action.payload });
+      } else if (action.type === "confirm") {
+        res = await apiRequest(`/api/orders/${action.order_id}/confirm`, { method: "POST", body: action.payload });
+      } else if (action.type === "update") {
+        res = await apiRequest(`/api/orders/${action.order_id}`, { method: "PUT", body: action.payload });
+      } else if (action.type === "delete") {
+        res = await apiRequest(`/api/orders/${action.order_id}`, { method: "DELETE" });
+      } else {
+        remaining.push(action);
+        continue;
+      }
+      if (res.ok || (action.type === "delete" && res.status === 404)) {
+        applied += 1;
+        const order = findOrderForAction(action);
+        if (action.type === "deliver") {
+          updateLocalItemsFromServer(order, res.data?.items);
+          // نعتمد نسخة الخادم (الكميات والمستلم) لضمان دقة الحالة بعد التسليم الجزئي.
+          await refreshOrderFromServer(action.order_id, action.client_uuid);
+        } else if (action.type === "update" && res.data?.order) {
+          replaceLocalOrderFromServer(action.client_uuid, res.data.order);
+        }
+      } else if (isClientError(res.status)) {
+        failed += 1;
+        errors.push(res.data?.error || res.error || `تعذر تنفيذ الإجراء (${res.status}).`);
+        // رفض الخادم الإجراء: نتراجع عن التحديث المتفائل ونعيد الحالة الحقيقية من الخادم.
+        revertActionLocally(action);
+        if (action.type !== "delete") {
+          await refreshOrderFromServer(action.order_id, action.client_uuid);
+        }
+      } else {
+        failed += 1;
+        action.last_error = res.data?.error || res.error || `status=${res.status}`;
+        remaining.push(action);
+      }
+    }
+    state.actions = remaining;
+    save(KEY_ACTIONS, state.actions);
+  }
+
+  return { applied, failed, errors };
+}
+
+export async function autoSync() {
+  if (!isOnline() || !isOnlineSession()) return null;
+  if (state.queue.length === 0 && state.actions.length === 0
+      && (state.serviceActions || []).length === 0 && state.snapshot) {
+    // إصلاح تلقائي للطلبات القديمة التي حُفظت بلا معرّفات أصناف من الخادم.
+    const needsItemIds = state.orders.some((o) => o.server_id
+      && Object.values(o.items || {}).some((line) => line.id == null || line.id === ""));
+    if (needsItemIds) return { history: await fetchServerOrders() };
+    return null;
+  }
+  return syncEverything();
 }

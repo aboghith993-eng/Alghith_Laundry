@@ -28,12 +28,12 @@
             <span>كلمة المرور</span>
             <input type="password" id="login-password" name="password" autocomplete="current-password" required>
           </label>
-          <label class="field" id="field-server">
+          <label class="field hidden" id="field-server">
             <span>عنوان الخادم</span>
             <input type="text" id="login-server" name="server" placeholder="https://example.onrender.com" dir="ltr" autocapitalize="off" autocorrect="off" spellcheck="false">
-            <small class="muted" id="login-server-hint">مطلوب في تطبيق الهاتف — عنوان الخادم الذي يعمل عليه النظام.</small>
+            <small class="muted" id="login-server-hint">يُضبط عنوان الخادم من إعدادات مدير النظام فقط.</small>
           </label>
-          <div class="row" id="row-server-test">
+          <div class="row hidden" id="row-server-test">
             <button type="button" class="btn btn-ghost btn-sm" id="btn-test-server">فحص الاتصال</button>
             <span class="small muted" id="login-server-status"></span>
           </div>
