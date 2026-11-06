@@ -102,14 +102,20 @@ function canViewResidents() {
   return role === "admin" || role === "supervisor" || role === "super_admin";
 }
 
-/* إخفاء صفحة الإعدادات والخدمات والمستخدمين عن غير مدير النظام. */
+/* صفحة الإعدادات والخدمات والمستخدمين لمدير النظام فقط؛
+   غير المدير يرى زر «حسابي» بدلاً منها (لضبط رمز الدخول دون اتصال والمزامنة). */
 function applyRoleVisibility() {
   const admin = isAdmin();
   $$(".tab").forEach((tab) => {
-    if (tab.dataset.page === "settings") tab.classList.toggle("hidden", !admin);
+    if (tab.dataset.page !== "settings" && tab.dataset.tabFor !== "settings") return;
+    const forPage = admin ? "settings" : "account";
+    tab.dataset.tabFor = "settings";
+    tab.dataset.page = forPage;
+    tab.innerHTML = `<span>⚙</span>${admin ? "الإعدادات" : "حسابي"}`;
+    tab.classList.remove("hidden");
   });
   if (!admin && (currentPage === "settings" || currentPage === "services" || currentPage === "users")) {
-    currentPage = "home";
+    currentPage = "account";
   }
   if (currentPage === "residents" && !canViewResidents()) {
     reportTab = "quantities";
@@ -118,10 +124,11 @@ function applyRoleVisibility() {
 }
 
 function setPage(page) {
-  if ((page === "settings" || page === "services" || page === "users") && !isAdmin()) {
+  if ((page === "services" || page === "users") && !isAdmin()) {
     toast("هذه الصفحة متاحة لمدير النظام فقط.", "warn");
     page = "home";
   }
+  if (page === "settings" && !isAdmin()) page = "account";
   if (page === "reports") reportTab = "quantities";
   if (page === "residents") {
     if (!canViewResidents()) {
@@ -499,7 +506,10 @@ function buildResidentsReport(from = residentsRange.from, to = residentsRange.to
     row.quantity += orderQuantity(order);
     row.received += orderReceived(order);
     row.value += orderTotal(order);
-    if (order.fulfillment_status === "delivered") row.delivered += 1;
+    // دفعات الاستلام الفعلية: قد يُسلّم نفس الطلب لأكثر من مستلم على دفعات متعددة.
+    row.delivered += (Array.isArray(order.receipts) && order.receipts.length)
+      ? order.receipts.length
+      : (order.fulfillment_status === "delivered" && orderReceived(order) > 0.0001 ? 1 : 0);
   }
   const list = [...rows.values()].sort((a, b) => String(a.name).localeCompare(String(b.name), "ar"));
   const headers = [
@@ -729,19 +739,21 @@ function bindReportsPage() {
 VIEWS.account = () => {
   const user = state.session || {};
   const snap = snapshotMeta();
+  const username = user.username || (getIdentity() || {}).username || "";
+  const pinReady = username && hasLocalPin(username);
   return `
     <div class="card">
       <h3 class="card-title">معلومات الحساب</h3>
       <p class="small">${esc(user.full_name || user.username || "-")} — ${esc(ROLE_LABELS[user.role] || user.role || "-")}</p>
     </div>
     <div class="card">
-      <h3 class="card-title">رمز الدخول المحلي</h3>
-      <p class="small muted">ضع رمزاً رقمياً لفتح التطبيق دون اتصال بالإنترنت (بعد أول تسجيل دخول).</p>
+      <h3 class="card-title">رمز الدخول المحلي ${pinReady ? '<span class="pill pill-synced">مفعّل على هذا الجهاز</span>' : '<span class="pill pill-local">غير مضبوط بعد</span>'}</h3>
+      <p class="small muted">ضع رمزاً رقمياً لفتح التطبيق دون اتصال بالإنترنت (بعد أول تسجيل دخول). ${pinReady ? "يمكنك تغييره في أي وقت." : "ينصح بضبطه بعد أول دخول بالإنترنت حتى تستطيع فتح التطبيق والمواصلة العمل دون شبكة."}</p>
       <label class="field">
         <span>رمز الدخول المحلي (4 أرقام أو أكثر)</span>
         <input type="password" id="cfg-pin" inputmode="numeric" placeholder="••••">
       </label>
-      <button class="btn btn-ghost btn-block" id="cfg-pin-save">حفظ رمز الدخول المحلي</button>
+      <button class="btn btn-ghost btn-block" id="cfg-pin-save">${pinReady ? "تغيير رمز الدخول المحلي" : "حفظ رمز الدخول المحلي"}</button>
     </div>
     <div class="card">
       <h3 class="card-title">المزامنة</h3>
@@ -1498,13 +1510,26 @@ function showOrderDetail(clientUuid) {
     ? `<span class="pill pill-synced">مُرسل${order.reference ? " · " + esc(order.reference) : ""}</span>`
     : '<span class="pill pill-local">محلي · بانتظار الإرسال</span>';
   const warnings = (order.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
+  const receipts = Array.isArray(order.receipts) ? order.receipts.filter((r) => (r.items || []).length) : [];
+  const receiptsBlock = receipts.length ? `
+    <p class="small" style="margin-top:10px"><strong>سجل دفعات الاستلام (${receipts.length})</strong></p>
+    <ul class="list">${receipts.map((receipt, index) => `
+      <li class="list-item" style="padding:8px 0">
+        <div class="li-main">
+          <div class="li-title">دفعة ${index + 1} — ${esc(receipt.receiver_name || "نفس الموظف")}${receipt.receiver_kind === "other" ? " (شخص آخر)" : ""}</div>
+          <div class="li-sub">${esc(receipt.received_at ? String(receipt.received_at).replace("T", " ").slice(0, 16) : "")}${receipt.recorded_by_name ? " · رصدها: " + esc(receipt.recorded_by_name) : ""}</div>
+          <div class="li-sub">${(receipt.items || []).map((line) => `${esc(line.item_name || "صنف")} × ${esc(line.quantity)}`).join(" · ")}</div>
+          ${receipt._local ? '<div class="li-sub">بانتظار الإرسال إلى الخادم</div>' : ""}
+        </div>
+      </li>`).join("")}</ul>` : "";
   openModal(`
     <h3>تفاصيل الطلب ${statusPill} ${orderStatusPill(order)} ${orderDeliveryPill(order)}</h3>
     <p class="small">${esc(emp ? emp.name : (order.employee_name || order.employee_code))} — ${esc(order.employee_code)}</p>
     <p class="small muted">${esc(order.service_date)} ${order.person_name ? "· " + esc(order.person_name) : ""}</p>
     ${order.notes ? `<p class="small">${esc(order.notes)}</p>` : ""}
     ${order.rejection_reason ? `<div class="warn-box"><strong>سبب الرفض / الإلغاء:</strong> ${esc(order.rejection_reason)}</div>` : ""}
-    ${order.receiver_name && receivedTotal > 0.0001 ? `<p class="small">مستلم الأصناف: ${esc(order.receiver_name)} ${order.receiver_kind === "other" ? "(شخص آخر)" : ""}</p>` : ""}
+    ${order.receiver_name && receivedTotal > 0.0001 ? `<p class="small">آخر مستلم: ${esc(order.receiver_name)} ${order.receiver_kind === "other" ? "(شخص آخر)" : ""}</p>` : ""}
+    ${receiptsBlock}
     <div class="table-wrap"><table class="data">
       <thead><tr><th>الصنف</th><th>الكمية</th><th>المستلم</th><th>المتبقي</th><th>سعر الوحدة</th><th>الإجمالي</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
@@ -1724,9 +1749,13 @@ async function showDeliverModal(order) {
     return;
   }
   const sameName = emp ? emp.name : (current.employee_name || current.person_name || current.employee_code);
+  const previousReceipts = (Array.isArray(current.receipts) ? current.receipts : [])
+    .filter((r) => (r.items || []).length || r.receiver_name);
+  const lastReceipt = previousReceipts[previousReceipts.length - 1];
   openModal(`
     <h3>تسليم / استلام قطع المغسلة</h3>
     <p class="small muted">حدّد الكميات المستلمة الآن. يمكن استلام الباقي لاحقاً.</p>
+    ${previousReceipts.length ? `<p class="small muted" style="border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px">دفعات استلام مسجَّلة سابقاً: <strong>${previousReceipts.length}</strong>${lastReceipt ? ` · آخر مستلم: ${esc(lastReceipt.receiver_name || "نفس الموظف")}` : ""}</p>` : ""}
     ${lines.map(({ line, remaining, serviceId }) => `<div class="item-row">
       <div>
         <div>${esc(line.item_name || line.name || "صنف")}</div>

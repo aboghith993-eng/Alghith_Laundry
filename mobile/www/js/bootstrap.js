@@ -161,6 +161,7 @@ async function doPinLogin(event) {
   if (session) {
     localStorage.setItem("ln_last_user", username);
     $("#login-pin").value = "";
+    errorBox.textContent = "";
     errorBox.classList.add("hidden");
     showApp();
     setPage("home");

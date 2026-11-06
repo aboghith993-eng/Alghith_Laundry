@@ -377,17 +377,89 @@ def _rows_to_dicts(rows: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _order_payload(row: Any) -> dict[str, Any]:
+def _order_receipts(db: Any, order_id: int) -> list[dict[str, Any]]:
+    """سجل دفعات استلام الأصناف لهذا الطلب: قد يسلم نفس الطلب لأكثر من مستلم على دفعات."""
+    receipts = _rows_to_dicts(
+        db.execute(
+            "SELECT r.id, r.receiver_kind, r.receiver_name, r.received_at, "
+            "u.full_name AS recorded_by_name FROM laundry_receipts r "
+            "LEFT JOIN users u ON u.id=r.received_by WHERE r.order_id=? ORDER BY r.id",
+            (order_id,),
+        ).fetchall()
+    )
+    for receipt in receipts:
+        receipt["items"] = _rows_to_dicts(
+            db.execute(
+                "SELECT ri.quantity, i.item_name, i.unit FROM laundry_receipt_items ri "
+                "JOIN laundry_order_items i ON i.id=ri.order_item_id "
+                "WHERE ri.receipt_id=? ORDER BY ri.id",
+                (receipt["id"],),
+            ).fetchall()
+        )
+    return receipts
+
+
+def _order_payload(row: Any, with_receipts: bool = True) -> dict[str, Any]:
     from app import order_items
 
     data = dict(row)
     data["items"] = _rows_to_dicts(order_items(row["id"]))
+    if with_receipts:
+        from app import get_db
+
+        data["receipts"] = _order_receipts(get_db(), row["id"])
+    else:
+        data["receipts"] = []
     for key, value in list(data.items()):
         if isinstance(value, datetime):
             data[key] = value.isoformat(timespec="seconds")
         elif isinstance(value, date):
             data[key] = value.isoformat()
     return data
+
+
+def _attach_receipts_bulk(orders: list[dict[str, Any]]) -> None:
+    """إرفاق سجل دفعات الاستلام لكل الطلبات بعدد استعلامات قليل (للقطة المزامنة)."""
+    from app import get_db
+
+    if not orders:
+        return
+    db = get_db()
+    order_by_id = {int(order["id"]): order for order in orders}
+    for order in orders:
+        order["receipts"] = []
+    ids = sorted(order_by_id.keys())
+    chunk_size = 90
+    for start in range(0, len(ids), chunk_size):
+        chunk = ids[start : start + chunk_size]
+        placeholders = ", ".join("?" for _ in chunk)
+        receipt_rows = _rows_to_dicts(
+            db.execute(
+                f"SELECT r.id, r.order_id, r.receiver_kind, r.receiver_name, r.received_at, "
+                f"u.full_name AS recorded_by_name FROM laundry_receipts r "
+                f"LEFT JOIN users u ON u.id=r.received_by WHERE r.order_id IN ({placeholders}) ORDER BY r.id",
+                tuple(chunk),
+            ).fetchall()
+        )
+        if not receipt_rows:
+            continue
+        receipt_ids = [int(receipt["id"]) for receipt in receipt_rows]
+        piece_rows = _rows_to_dicts(
+            db.execute(
+                f"SELECT ri.receipt_id, ri.quantity, i.item_name, i.unit FROM laundry_receipt_items ri "
+                f"JOIN laundry_order_items i ON i.id=ri.order_item_id "
+                f"WHERE ri.receipt_id IN ({', '.join('?' for _ in receipt_ids)}) ORDER BY ri.id",
+                tuple(receipt_ids),
+            ).fetchall()
+        )
+        pieces_by_receipt: dict[int, list[dict[str, Any]]] = {}
+        for piece in piece_rows:
+            pieces_by_receipt.setdefault(int(piece.pop("receipt_id")), []).append(piece)
+        for receipt in receipt_rows:
+            target = order_by_id.get(int(receipt.pop("order_id")))
+            if target is not None:
+                receipt["items"] = pieces_by_receipt.get(int(receipt["id"]), [])
+                target["receipts"].append(receipt)
 
 
 def _settings_map() -> dict[str, str]:
@@ -441,7 +513,9 @@ def _filter_orders(
         )
         params.extend([like, like, like, like, like])
     where = " AND ".join(conditions)
-    return [_order_payload(row) for row in order_query(where, tuple(params))]
+    orders = [_order_payload(row, with_receipts=False) for row in order_query(where, tuple(params))]
+    _attach_receipts_bulk(orders)
+    return orders
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +574,7 @@ def api_mobile_snapshot_full() -> Any:
     return jsonify(
         {
             "ok": True,
-            "version": 4,
+            "version": 5,
             "built_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
             "counts": {
                 "employees": len(employees),
@@ -514,7 +588,7 @@ def api_mobile_snapshot_full() -> Any:
             "orders": orders,
             "settings": settings,
             "company": _company_public(g.api_company) if g.get("api_company") else None,
-            "meta": {"source": "mobile-offline-full-v4"},
+            "meta": {"source": "mobile-offline-full-v5-receipts"},
         }
     )
 
@@ -792,6 +866,8 @@ def _delivery_ok(db: Any, order_id: int, message: str) -> Any:
             "remaining": max(remaining, 0.0),
             "fulfillment_status": "delivered",
             "items": items_after,
+            # سجل كامل لدفعات الاستلام (قد يكون هناك أكثر من مستلم لنفس الطلب).
+            "receipts": _order_receipts(db, order_id),
         }
     )
 

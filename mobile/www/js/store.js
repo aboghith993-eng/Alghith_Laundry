@@ -70,6 +70,14 @@ export function storeSession(session, tokens) {
   state.tokens = tokens;
   save(KEY_SESSION, session);
   save(KEY_TOKENS, tokens);
+  const username = String(
+    session?.username || (getIdentity() || {}).username || ""
+  ).toLowerCase();
+  if (username) {
+    // نسخة جلسة ورموز لكل مستخدم حتى يعمل الدخول بالرمز المحلي لأي حساب على نفس الجهاز.
+    save(`${KEY_SESSION}:${username}`, session);
+    save(`${KEY_TOKENS}:${username}`, tokens);
+  }
   storeIdentity(session);
   setLocked(false);
 }
@@ -120,26 +128,38 @@ export function clearSession() {
 
 /* خروج كامل يزيل كل شيء بما فيه الهوية والرمز المحلي. */
 export function fullSignOut() {
-  const username = (state.session || getIdentity() || {}).username || "";
+  const username = String(
+    (state.session || getIdentity() || {}).username || ""
+  ).toLowerCase();
   state.session = null;
   state.tokens = null;
   localStorage.removeItem(KEY_SESSION);
   localStorage.removeItem(KEY_TOKENS);
   localStorage.removeItem(KEY_IDENTITY);
   localStorage.removeItem(KEY_LOCK);
-  if (username) localStorage.removeItem(`${KEY_PIN}:${username}`);
+  if (username) {
+    localStorage.removeItem(`${KEY_PIN}:${username}`);
+    localStorage.removeItem(`${KEY_SESSION}:${username}`);
+    localStorage.removeItem(`${KEY_TOKENS}:${username}`);
+  }
 }
 
 /* فتح التطبيق بالرمز المحلي: يعيد الجلسة والرموز المحفوظة ليعمل دون اتصال
    وتتم المزامنة تلقائياً عند عودة الاتصال. */
 export function unlockWithLocalPin(username) {
-  const identity = getIdentity();
-  const stored = load(KEY_SESSION, null);
-  const session = stored || identity;
+  const key = String(username || "").toLowerCase();
+  let session = load(`${KEY_SESSION}:${key}`, null);
+  let tokens = load(`${KEY_TOKENS}:${key}`, null);
+  if (!session) {
+    // نسخ قديمة: تُفحص الجلسة العامة ثم الهوية المحلية.
+    const identity = getIdentity();
+    session = load(KEY_SESSION, null) || identity;
+  }
   if (!session) return null;
   state.session = { ...session, username: session.username || username };
-  state.tokens = load(KEY_TOKENS, null);
+  state.tokens = tokens || load(KEY_TOKENS, null);
   save(KEY_SESSION, state.session);
+  if (state.tokens) save(KEY_TOKENS, state.tokens);
   setLocked(false);
   return state.session;
 }
@@ -640,6 +660,47 @@ function normalizeServerItems(lines) {
   return out;
 }
 
+/* ---------- سجل دفعات الاستلام (قد يتعدى مستلم واحد على دفعات متعددة) ---------- */
+
+function normalizeServerReceipt(rows) {
+  if (!rows || typeof rows !== "object") return null;
+  return {
+    id: rows.id != null ? rows.id : "",
+    receiver_kind: rows.receiver_kind || "",
+    receiver_name: rows.receiver_name || "",
+    received_at: rows.received_at || "",
+    recorded_by_name: rows.recorded_by_name || "",
+    items: (Array.isArray(rows.items) ? rows.items : []).map((line) => ({
+      item_name: line.item_name || "",
+      unit: line.unit || "",
+      quantity: Number(line.quantity || 0),
+    })),
+    _local: false,
+  };
+}
+
+function receiptSignature(receipt) {
+  return `${receipt.receiver_kind || ""}|${receipt.receiver_name || ""}|`
+    + (Array.isArray(receipt.items) ? receipt.items : [])
+      .map((line) => `${line.item_name}×${Number(line.quantity || 0)}`)
+      .sort()
+      .join(",");
+}
+
+/* دمج سجل الخادم مع الدفعات المحلية التي لم تُرسل بعد (دون تكرار). */
+function mergeServerReceipts(localReceipts, serverReceipts) {
+  const server = (Array.isArray(serverReceipts) ? serverReceipts : [])
+    .map(normalizeServerReceipt)
+    .filter(Boolean);
+  if (!server.length) return localReceipts || [];
+  const signatures = new Set(server.map(receiptSignature));
+  const pending = (localReceipts || []).filter((receipt) => (
+    (receipt._local || receipt.id == null || receipt.id === "")
+    && !signatures.has(receiptSignature(receipt))
+  ));
+  return [...server, ...pending];
+}
+
 function normalizeServerOrder(row) {
   return {
     client_uuid: row.client_uuid || `srv-${row.id}`,
@@ -660,6 +721,7 @@ function normalizeServerOrder(row) {
     rejection_reason: row.rejection_reason || "",
     receiver_kind: row.receiver_kind || "",
     receiver_name: row.receiver_name || "",
+    receipts: Array.isArray(row.receipts) ? row.receipts.map(normalizeServerReceipt).filter(Boolean) : [],
     creator_name: row.creator_name || "",
     confirmer_name: row.confirmer_name || "",
     deliverer_name: row.deliverer_name || "",
@@ -693,6 +755,7 @@ function mergeServerOrders(list) {
         ...local,
         ...incoming,
         items: mergedItems,
+        receipts: mergeServerReceipts(local.receipts || [], incoming.receipts),
         sync_state: local.sync_state === "pending" ? "pending" : "synced",
       };
     } else {
@@ -783,15 +846,20 @@ function snapshotOrderForAction(order) {
     employee_code: order.employee_code,
     employee_name: order.employee_name,
     items: JSON.parse(JSON.stringify(order.items || {})),
+    receipts: JSON.parse(JSON.stringify(order.receipts || [])),
   };
 }
 
 export function queueAction(type, order, payload = {}, localPatch = {}) {
-  if (!order || !order.server_id) return null;
+  if (!order) return null;
+  // التسليم للمستلم مسموح وهو طلب محلي لم يُرسل بعد (متعهد المغسلة ينشئ الطلب ويستلمه دون اتصال)؛
+  // إلا التسليم فبقية إجراءات الطلب تتطلب أن يكون مرسلاً إلى الخادم.
+  const requiresServer = type !== "deliver";
+  if (requiresServer && !order.server_id) return null;
   const action = {
     action_id: uuid(),
     type,
-    order_id: order.server_id,
+    order_id: order.server_id || null,
     client_uuid: order.client_uuid || "",
     payload,
     localPatch,
@@ -822,6 +890,7 @@ function applyActionLocally(action) {
   if (action.type === "deliver") {
     const pieces = Array.isArray(action.payload.pieces) ? action.payload.pieces : [];
     const items = { ...(order.items || {}) };
+    const receiptLines = [];
     let matched = 0;
     if (pieces.length) {
       for (const piece of pieces) {
@@ -831,8 +900,13 @@ function applyActionLocally(action) {
           || (piece.id != null && String(key) === String(piece.id))
         ));
         if (!entry) continue;
-        matched += 1;
         const [key, line] = entry;
+        matched += 1;
+        const qty = Math.min(
+          Number(line.quantity || 0) - Number(line.received_quantity || 0),
+          Number(piece.quantity || 0)
+        );
+        if (qty <= 0) continue;
         items[key] = {
           ...line,
           received_quantity: Math.min(
@@ -840,19 +914,46 @@ function applyActionLocally(action) {
             Number(line.received_quantity || 0) + Number(piece.quantity || 0)
           ),
         };
+        // تدوين كل دفعة استلام باسم مستلمها — قد يكون هناك أكثر من مستلم لنفس الطلب.
+        receiptLines.push({
+          item_name: line.item_name || line.name || "",
+          unit: line.unit || "",
+          quantity: qty,
+        });
       }
       // لا نُطبّق مستلماً أو حالة تسليم إن لم تتطابق أي قطعة — حتى لا تظهر بيانات وهمية.
       if (!matched) return;
     } else {
       for (const [key, line] of Object.entries(items)) {
+        const remainingNow = Math.max(Number(line.quantity || 0) - Number(line.received_quantity || 0), 0);
+        if (remainingNow > 0.0001) {
+          receiptLines.push({
+            item_name: line.item_name || line.name || "",
+            unit: line.unit || "",
+            quantity: remainingNow,
+          });
+        }
         items[key] = { ...line, received_quantity: Number(line.quantity || 0) };
       }
+      if (!matched && !receiptLines.length) return;
     }
     order.items = items;
     order.fulfillment_status = "delivered";
     order.delivered_at = order.delivered_at || new Date().toISOString();
     order.receiver_kind = action.payload.receiver_kind || "same_employee";
     order.receiver_name = action.payload.receiver_name || order.receiver_name || "";
+    order.receipts = [
+      ...(order.receipts || []),
+      {
+        id: `local-${uuid()}`,
+        receiver_kind: order.receiver_kind,
+        receiver_name: order.receiver_name,
+        received_at: new Date().toISOString(),
+        recorded_by_name: "",
+        items: receiptLines,
+        _local: true,
+      },
+    ];
   } else if (action.type === "confirm") {
     order.status = action.payload.decision || "approved";
     order.confirmed_at = new Date().toISOString();
@@ -884,6 +985,7 @@ function revertActionLocally(action) {
   order.employee_code = snapshot.employee_code;
   order.employee_name = snapshot.employee_name;
   order.items = JSON.parse(JSON.stringify(snapshot.items || {}));
+  order.receipts = JSON.parse(JSON.stringify(snapshot.receipts || []));
   saveLocalOrder(order);
 }
 
@@ -904,6 +1006,7 @@ export async function refreshOrderFromServer(orderId, clientUuid = "") {
       ...local,
       ...incoming,
       client_uuid: local.client_uuid,
+      receipts: mergeServerReceipts(local.receipts || [], incoming.receipts),
       sync_state: local.sync_state === "pending" ? "pending" : "synced",
     };
     save(KEY_ORDERS, state.orders);
@@ -920,10 +1023,12 @@ function replaceLocalOrderFromServer(clientUuid, row) {
   const incoming = normalizeServerOrder(row);
   const idx = state.orders.findIndex((o) => o.client_uuid === clientUuid);
   if (idx >= 0) {
+    const local = state.orders[idx];
     state.orders[idx] = {
-      ...state.orders[idx],
+      ...local,
       ...incoming,
-      client_uuid: state.orders[idx].client_uuid,
+      client_uuid: local.client_uuid,
+      receipts: mergeServerReceipts(local.receipts || [], incoming.receipts),
       sync_state: "synced",
     };
     save(KEY_ORDERS, state.orders);
@@ -1103,10 +1208,28 @@ export async function syncActions() {
   }
 
   if (hasOrder) {
+    // إجراءات تسليم مسجّلة دون اتصال على طلبات لم يُرسلها الجهاز بعد:
+    // نمرّر (push) هذه الطلبات أولاً حتى نحصل على معرّفها من الخادم، ثم ننفّذ التسليم.
+    const unresolvedDeliveries = state.actions.some((a) => a.type === "deliver" && !a.order_id && a.client_uuid);
+    if (unresolvedDeliveries && isOnline() && state.queue.length) {
+      await syncOrders();
+      for (const action of state.actions) {
+        if (action.type !== "deliver" || action.order_id) continue;
+        const local = findOrderForAction(action);
+        if (local && local.server_id) action.order_id = local.server_id;
+      }
+      save(KEY_ACTIONS, state.actions);
+    }
     const remaining = [];
     for (const action of state.actions.slice()) {
       let res;
       if (action.type === "deliver") {
+        if (!action.order_id) {
+          // ما زال الطلب غير مُرسل (خدمة أخرى أو فشل الإرسال) — نتركه للدورة القادمة.
+          action.last_error = "بانتظار إرسال الطلب إلى الخادم أولاً.";
+          remaining.push(action);
+          continue;
+        }
         res = await apiRequest(`/api/orders/${action.order_id}/deliver`, { method: "POST", body: action.payload });
       } else if (action.type === "confirm") {
         res = await apiRequest(`/api/orders/${action.order_id}/confirm`, { method: "POST", body: action.payload });
