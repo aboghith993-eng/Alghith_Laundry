@@ -269,10 +269,10 @@ function orderStatusPill(order) {
 }
 
 function orderDeliveryPill(order) {
-  if (order.fulfillment_status !== "delivered") return "";
-  if (orderReceived(order) <= 0.0001) return "";
   if (orderIsPartial(order)) return '<span class="pill pill-pending">تسليم جزئي</span>';
-  return '<span class="pill pill-synced">تم التسليم</span>';
+  if (order.fulfillment_status === "delivered" && orderReceived(order) > 0.0001) return '<span class="pill pill-synced">تم التسليم</span>';
+  if (orderRemaining(order) > 0.0001) return '<span class="pill pill-local">مرحلة التسليم</span>';
+  return "";
 }
 
 /* ---------- الشاشات ---------- */
@@ -320,9 +320,65 @@ VIEWS.home = () => {
     </div>`;
 };
 
+/* حالات التسليم: غير مستلم / جزئي / كامل — تُستخدم في الفلترة والتصدير. */
+function orderDeliveryState(o) {
+  const received = orderReceived(o);
+  if (o.fulfillment_status === "delivered") {
+    return orderIsPartial(o) ? "partial" : "received";
+  }
+  return received > 0.0001 ? "partial" : "not-received";
+}
+
+const ORDER_DELIVERY_LABELS = {
+  "all": "الكل",
+  "not-received": "غير مستلمة",
+  "partial": "مستلمة جزئياً",
+  "received": "مستلمة كاملة",
+};
+
+const ORDER_STATUS_LABELS_ALL = { "all": "الكل", "pending": "قيد الاعتماد", "approved": "معتمد", "rejected": "مرفوض" };
+
+let ordersFilter = { delivery: "all", status: "all", q: "", from: "", to: "" };
+let ordersPage = 1;
+const ORDERS_PAGE_SIZE = 25;
+
+/* تضمين كل الطلبات المحلية + سجل الخادم المحمَّل، مع تشغيل الفلاتر والبحث واستخراج صفحات العرض. */
+function filteredOrders() {
+  const q = ordersFilter.q.trim().toLowerCase();
+  return getLocalOrders().filter((o) => {
+    if (ordersFilter.delivery !== "all" && orderDeliveryState(o) !== ordersFilter.delivery) return false;
+    if (canReviewOrders() && ordersFilter.status !== "all" && (o.status || "pending") !== ordersFilter.status) return false;
+    if (ordersFilter.from && (o.service_date || "") < ordersFilter.from) return false;
+    if (ordersFilter.to && (o.service_date || "") > ordersFilter.to) return false;
+    if (q) {
+      const haystack = [
+        o.reference, o.client_uuid, o.employee_code, o.employee_name, o.person_name,
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function orderCreatorName(o) {
+  return o.creator_name || "";
+}
+
+function orderConfirmerInfo(o) {
+  if (o.status === "approved") {
+    return {
+      label: "اعتمده",
+      value: [o.confirmer_name, o.confirmed_at ? String(o.confirmed_at).replace("T", " ").slice(0, 16) : ""]
+        .filter(Boolean).join(" · "),
+    };
+  }
+  if (o.status === "rejected") {
+    return { label: "رفضه", value: o.confirmer_name || "", reason: o.rejection_reason || "" };
+  }
+  return { label: "الاعتماد", value: "قيد المراجعة" };
+}
+
 VIEWS.orders = () => {
-  const local = getLocalOrders();
-  const items = local.slice(0, 200);
   const pendingActions = pendingActionCount();
   const header = `
     <div class="card">
@@ -333,18 +389,29 @@ VIEWS.orders = () => {
         ${pendingActions ? `<span class="pill pill-local">${pendingActions} إجراء بانتظار الإرسال</span>` : ""}
       </div>
     </div>`;
-  if (!items.length) {
+  const all = getLocalOrders();
+  if (!all.length) {
     return `${header}
       <div class="empty"><div class="big">≡</div><p>لا توجد طلبات محفوظة على هذا الجهاز بعد.</p>
       <button class="btn btn-primary" data-go="new">إنشاء طلب جديد</button></div>`;
   }
-  const ordersExportHeader = `<div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
-      <button class="btn btn-primary btn-sm" id="orders-export-xls">EXPORT Excel ▾</button>
-      <button class="btn btn-ghost btn-sm" id="orders-export-csv">CSV</button>
-    </div>`;
-  return `${header}${ordersExportHeader}
+  const deliveryPills = Object.entries(ORDER_DELIVERY_LABELS).map(([key, label]) => `
+    <button class="btn btn-sm ${ordersFilter.delivery === key ? "btn-primary" : "btn-ghost"}" data-odelivery="${key}">${label}</button>
+  `).join("");
+  const statusPills = canReviewOrders() ? `
+    <div class="row" id="orders-status-filter" style="flex-wrap:wrap;gap:6px;margin-top:8px">
+      ${Object.entries(ORDER_STATUS_LABELS_ALL).map(([key, label]) => `
+        <button class="btn btn-sm ${ordersFilter.status === key ? "btn-primary" : "btn-ghost"}" data-ostatus="${key}">${label}</button>
+      `).join("")}
+    </div>` : "";
+  const items = filteredOrders();
+  const totalPages = Math.max(Math.ceil(items.length / ORDERS_PAGE_SIZE), 1);
+  if (ordersPage > totalPages) ordersPage = totalPages;
+  const start = (ordersPage - 1) * ORDERS_PAGE_SIZE;
+  const pageItems = items.slice(start, start + ORDERS_PAGE_SIZE);
+  const listHtml = pageItems.length ? `
     <ul class="list" id="orders-list">
-      ${items.map((o) => {
+      ${pageItems.map((o) => {
         const emp = searchEmployee(o.employee_code);
         const name = emp ? emp.name : (o.employee_name || o.employee_code);
         const isSent = o.sync_state === "created" || o.sync_state === "duplicate" || o.source === "server";
@@ -353,16 +420,51 @@ VIEWS.orders = () => {
           : `<span class="pill pill-local">محلي</span>`;
         const reviewPill = orderStatusPill(o);
         const deliveredPill = orderDeliveryPill(o);
+        const receiptsCount = (Array.isArray(o.receipts) ? o.receipts : []).length;
         return `<li class="list-item" data-uuid="${esc(o.client_uuid)}">
           <div class="li-main">
             <div class="li-title">${esc(name)} ${statePill} ${reviewPill} ${deliveredPill}</div>
-            <div class="li-sub">${esc(o.employee_code)} · ${esc(o.service_date)} · ${esc(o.person_name || "")}</div>
-            <div class="li-sub">${money(orderTotal(o))} ${esc(settings().currency || "")}</div>
+            <div class="li-sub">${esc(o.employee_code)} · ${esc(o.service_date)} ${o.person_name ? "· " + esc(o.person_name) : ""}</div>
+            <div class="li-sub">${money(orderTotal(o))} ${esc(settings().currency || "")}${o.creator_name ? ` · أنشأه: ${esc(orderCreatorName(o))}` : ""}${receiptsCount > 1 ? ` · ${receiptsCount} دفعات تسليم` : ""}</div>
           </div>
           <button class="btn btn-sm btn-ghost" data-detail="${esc(o.client_uuid)}">تفاصيل</button>
         </li>`;
       }).join("")}
-    </ul>`;
+    </ul>` : `<div class="empty"><div class="big">⌕</div><p>لا توجد طلبات مطابقة للفلاتر الحالية.</p>
+      <button class="btn btn-ghost" id="orders-clear-filters">مسح الفلاتر</button></div>`;
+  const pager = `
+    <div class="row" style="justify-content:space-between;align-items:center;margin:10px 0">
+      <button class="btn btn-ghost btn-sm" id="orders-prev" ${ordersPage <= 1 ? "disabled" : ""}>‹ السابق</button>
+      <span class="small muted">صفحة ${ordersPage} من ${totalPages} · ${items.length} طلب</span>
+      <button class="btn btn-ghost btn-sm" id="orders-next" ${ordersPage >= totalPages ? "disabled" : ""}>التالي ›</button>
+    </div>`;
+  const exportBar = `
+    <div class="card">
+      <h3 class="card-title">تصدير جميع البيانات</h3>
+      <p class="small muted">يُصدَّر كل الطلبات المطابقة للفلاتر (لا الصفحة الحالية) مع أقسام دفعات الاستلام والمستلمين${canReviewOrders() ? " ومجموعة الطلبات غير المعتمدة" : ""}.</p>
+      <div class="row">
+        <button class="btn btn-primary btn-sm" id="orders-export-pdf">تصدير PDF ▾</button>
+        <button class="btn btn-ghost btn-sm" id="orders-export-xls">Excel ▾</button>
+        <button class="btn btn-ghost btn-sm" id="orders-export-csv">CSV</button>
+      </div>
+    </div>`;
+  return `${header}
+    <div class="card">
+      <h3 class="card-title">تصفية وبحث</h3>
+      <div class="row" id="orders-delivery-filter" style="flex-wrap:wrap;gap:6px">${deliveryPills}</div>
+      ${statusPills}
+      <label class="field" style="margin-top:10px"><span>بحث (رقم الطلب، رقم الكود، اسم الموظف، اسم الزائر)</span>
+        <input type="text" id="orders-q" value="${esc(ordersFilter.q)}" placeholder="مثال: LND-2611-000031 أو 10159 أو محمد">
+      </label>
+      <div class="row">
+        <label class="field" style="flex:1"><span>من تاريخ الخدمة</span><input type="date" id="orders-from" value="${esc(ordersFilter.from)}"></label>
+        <label class="field" style="flex:1"><span>إلى تاريخ الخدمة</span><input type="date" id="orders-to" value="${esc(ordersFilter.to)}"></label>
+      </div>
+    </div>
+    ${items.length > ORDERS_PAGE_SIZE ? pager : ""}
+    ${listHtml}
+    ${items.length > ORDERS_PAGE_SIZE ? pager : ""}
+    ${exportBar}`;
 };
 
 /* ---------- تقرير الكميات والقيمة ---------- */
@@ -1350,9 +1452,14 @@ function bindNewOrderPage() {
   if (saveBtn) saveBtn.addEventListener("click", saveOrder);
 }
 
-function buildOrdersExportRows() {
-  const local = getLocalOrders();
-  return local.map((o) => {
+/* بناء أقسام التقرير الكامل: الطلبات ثم دفعات الاستلام ثم (للمشرف/المدير) الطلبات غير المعتمدة والإجماليات. */
+function buildOrdersExportSections() {
+  const isReviewer = canReviewOrders();
+  const orders = filteredOrders();
+  const role = currentRole();
+  const roleLabel = { admin: "مدير النظام", contractor: "متعهد المغسلة", supervisor: "مشرف السكن", super_admin: "مدير عام" }[role] || role || "";
+
+  const orderRows = orders.map((o, index) => {
     const emp = searchEmployee(o.employee_code);
     const name = emp ? emp.name : (o.employee_name || o.employee_code);
     const itemsText = Object.entries(o.items || {}).map(([id, line]) => {
@@ -1360,26 +1467,228 @@ function buildOrdersExportRows() {
       return `${line.item_name || item?.name || id}: ${line.quantity}`;
     }).join(" | ");
     const isSent = o.sync_state === "created" || o.sync_state === "duplicate" || o.source === "server";
+    const deliveryState = orderDeliveryState(o);
+    const deliveryText = deliveryState === "received" ? "مستلمة كاملة" : deliveryState === "partial" ? "مستلمة جزئياً" : "لم يتم الاستلام";
+    const confirmer = orderConfirmerInfo(o);
+    const receipts = (Array.isArray(o.receipts) ? o.receipts : []).filter((r) => (r.items || []).length || r.receiver_name);
+    const lastReceiver = receipts.length ? receipts[receipts.length - 1].receiver_name : (o.receiver_name || "");
     return [
-      o.reference || o.client_uuid || "",
+      index + 1,
+      o.reference || (isSent ? "" : "بانتظار الإرسال"),
       o.service_date || "",
+      (o.created_at || "").replace("T", " ").slice(0, 16),
+      orderCreatorName(o),
       name,
       o.employee_code || "",
       o.person_name || "",
       itemsText,
       Number(orderTotal(o).toFixed(2)),
       isSent ? "مُرسل" : "محلي",
-      STATUS_LABELS[o.status] || o.status || "—",
-      orderIsPartial(o) ? "تسليم جزئي" : (o.fulfillment_status === "delivered" ? "تم التسليم" : "—"),
-      o.receiver_name || "",
+      STATUS_LABELS[o.status] || o.status || "قيد الاعتماد",
+      isReviewer ? confirmer.label + ": " + (confirmer.value || "—") : "",
+      deliveryText,
+      lastReceiver,
+      receipts.length ? String(receipts.length) : (deliveryState === "not-received" ? "0" : ""),
     ];
   });
+
+  const orderHeaders = [
+    "#", "رقم الطلب", "تاريخ الخدمة", "تاريخ الإنشاء", "أنشأ الطلب", "الموظف",
+    "الكود", "الزائر", "الأصناف المطلوبة", "القيمة", "حالة الإرسال",
+  ];
+  if (isReviewer) orderHeaders.push("الاعتماد (المُعتمد وتاريخه)");
+  orderHeaders.push("حالة التسليم", "آخر مستلم", "عدد دفعات الاستلام");
+
+  /* دفعة واحدة لكل مستلم: رقم الطلب + الدفعة + من استلم + متى + ماذا استلم. */
+  const receiptRows = [];
+  let receiptNo = 0;
+  for (const o of orders) {
+    const emp = searchEmployee(o.employee_code);
+    const name = emp ? emp.name : (o.employee_name || o.employee_code);
+    const receipts = (Array.isArray(o.receipts) ? o.receipts : []).filter((r) => (r.items || []).length || r.receiver_name);
+    receipts.forEach((receipt, idx) => {
+      receiptNo += 1;
+      receiptRows.push([
+        receiptNo,
+        o.reference || o.client_uuid || "",
+        name,
+        o.employee_code || "",
+        `دفعة ${idx + 1}`,
+        receipt.receiver_name || "نفس الموظف",
+        receipt.receiver_kind === "other" ? "شخص آخر" : "الموظف نفسه",
+        (receipt.received_at || "").replace("T", " ").slice(0, 16),
+        receipt.recorded_by_name || "",
+        (receipt.items || []).map((line) => `${line.item_name || "صنف"} × ${line.quantity}`).join(" | "),
+        (receipt.items || []).reduce((sum, line) => sum + Number(line.quantity || 0), 0),
+      ]);
+    });
+  }
+
+  const totals = orders.reduce(
+    (acc, o) => {
+      acc.total += Number(orderTotal(o) || 0);
+      const state = orderDeliveryState(o);
+      acc[state] += 1;
+      return acc;
+    },
+    { total: 0, "not-received": 0, partial: 0, received: 0 }
+  );
+  const currency = settings().currency || "";
+
+  const sections = [
+    {
+      heading: `قائمة الطلبات (${orders.length})`,
+      headers: orderHeaders,
+      rows: orderRows,
+    },
+    {
+      heading: `سجل دفعات الاستلام والمستلمين (${receiptNo})`,
+      headers: ["#", "رقم الطلب", "الموظف", "الكود", "الدفعة", "المستلم", "صفة المستلم", "تاريخ الاستلام", "رصدها", "الأصناف المستلمة", "عدد القطع"],
+      rows: receiptRows,
+    },
+  ];
+
+  if (isReviewer) {
+    const notApprovedRows = orders
+      .filter((o) => !o.status || o.status === "pending")
+      .map((o, index) => {
+        const emp = searchEmployee(o.employee_code);
+        const name = emp ? emp.name : (o.employee_name || o.employee_code);
+        const isSent = o.sync_state === "created" || o.sync_state === "duplicate" || o.source === "server";
+        return [
+          index + 1,
+          o.reference || o.client_uuid || "",
+          o.service_date || "",
+          name,
+          o.employee_code || "",
+          Number(orderTotal(o).toFixed(2)),
+          orderCreatorName(o) || "",
+          (o.created_at || "").replace("T", " ").slice(0, 16),
+          orderDeliveryState(o) === "received" ? "مستلمة كاملة" : orderDeliveryState(o) === "partial" ? "جزئياً" : "لم يتم الاستلام",
+          isSent ? "" : "لم يُرسَل للخادم بعد",
+        ];
+      });
+    sections.push({
+      heading: `الطلبات غير المعتمدة — بانتظار مراجعة المشرف (${notApprovedRows.length})`,
+      headers: ["#", "رقم الطلب", "تاريخ الخدمة", "الموظف", "الكود", "القيمة", "أنشأ الطلب", "تاريخ الإنشاء", "حالة التسليم", "ملاحظة"],
+      rows: notApprovedRows,
+    });
+  }
+
+  const totalsSection = {
+    heading: "الإجماليات",
+    headers: ["البيان", "القيمة"],
+    rows: [
+      ["عدد الطلبات", orders.length],
+      ["إجمالي القيمة", Number(totals.total.toFixed(2)) + (currency ? " " + currency : "")],
+      ["مستلمة كاملة", totals.received],
+      ["مستلمة جزئياً", totals.partial],
+      ["غير مستلمة", totals["not-received"]],
+      ["إجمالي دفعات الاستلام", receiptNo],
+    ],
+  };
+  if (isReviewer) totalsSection.rows.push(["غير معتمدة", orders.filter((o) => !o.status || o.status === "pending").length]);
+  sections.push(totalsSection);
+
+  return { role, roleLabel, orders, sections, totalValue: totals.total, currency };
 }
 
+/* نص سطر التقارير (URI/Web) — أُعيد استخدامه للتصدير بنفس معايير الفلاتر. */
+function ordersExportMeta() {
+  const { orders, roleLabel, totalValue, currency } = buildOrdersExportSections();
+  const deliveryLabel = ORDER_DELIVERY_LABELS[ordersFilter.delivery] || ordersFilter.delivery;
+  const statusLabelOrder = canReviewOrders() ? " · الحالة: " + (ORDER_STATUS_LABELS_ALL[ordersFilter.status] || "الكل") : "";
+  return [
+    `المستخدم: ${state.session?.full_name || ""} (${roleLabel})`,
+    `التاريخ: ${todayIso()} · الفلاتر: حالة التسليم = ${deliveryLabel}${statusLabelOrder}`
+      + (ordersFilter.q ? ` · بحث: «${ordersFilter.q}»` : "")
+      + (ordersFilter.from || ordersFilter.to ? ` · من ${ordersFilter.from || "—"} إلى ${ordersFilter.to || "—"}` : ""),
+    `النتيجة: ${orders.length} طلب · الإجمالي ${Number(totalValue.toFixed(2))} ${currency}`,
+  ];
+}
+
+/* إعادة ربط واجهة الطلبات بعد كل عرض (فلاتر + بحث + ترقيم + تصدير). */
 function bindOrdersPage() {
   $$("[data-detail]").forEach((btn) => {
     btn.addEventListener("click", () => showOrderDetail(btn.dataset.detail));
   });
+  /* الفلاتر: حالة التسليم وحالة الاعتماد */
+  $$("[data-odelivery]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      ordersFilter.delivery = btn.dataset.odelivery;
+      ordersPage = 1;
+      render();
+    });
+  });
+  $$("[data-ostatus]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      ordersFilter.status = btn.dataset.ostatus;
+      ordersPage = 1;
+      render();
+    });
+  });
+  const clearBtn = $("#orders-clear-filters");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      ordersFilter = { delivery: "all", status: "all", q: "", from: "", to: "" };
+      ordersPage = 1;
+      render();
+    });
+  }
+  /* بحث نصي: مع تأخير بسيط حتى لا يفقد المؤشر تركيزه بعد كل حرف */
+  const qInput = $("#orders-q");
+  if (qInput) {
+    let timer = null;
+    const applyQuery = () => {
+      if (qInput.value.trim() === ordersFilter.q.trim()) return;
+      ordersFilter.q = qInput.value;
+      ordersPage = 1;
+      render();
+      const again = $("#orders-q");
+      if (again) {
+        again.focus();
+        const end = again.value.length;
+        again.setSelectionRange(end, end);
+      }
+    };
+    qInput.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(applyQuery, 400);
+    });
+    qInput.addEventListener("search", applyQuery);
+  }
+  const fromInput = $("#orders-from");
+  const toInput = $("#orders-to");
+  if (fromInput) {
+    fromInput.addEventListener("change", () => {
+      ordersFilter.from = fromInput.value;
+      ordersPage = 1;
+      render();
+    });
+  }
+  if (toInput) {
+    toInput.addEventListener("change", () => {
+      ordersFilter.to = toInput.value;
+      ordersPage = 1;
+      render();
+    });
+  }
+  const prevBtn = $("#orders-prev");
+  const nextBtn = $("#orders-next");
+  if (prevBtn) {
+    prevBtn.addEventListener("click", () => {
+      ordersPage = Math.max(ordersPage - 1, 1);
+      render();
+      window.scrollTo({ top: 0 });
+    });
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener("click", () => {
+      ordersPage += 1;
+      render();
+      window.scrollTo({ top: 0 });
+    });
+  }
   const reloadBtn = $("#btn-reload-orders");
   if (reloadBtn) {
     reloadBtn.addEventListener("click", async () => {
@@ -1390,27 +1699,61 @@ function bindOrdersPage() {
       render();
     });
   }
-  const xlsBtn = $("#orders-export-xls");
-  if (xlsBtn) {
-    xlsBtn.addEventListener("click", () => {
-      try {
-        const stamp = todayIso().replace(/-/g, "");
-        const headers = ["المرجع", "تاريخ الخدمة", "الموظف", "الكود", "الزائر", "الأصناف", "القيمة", "الحالة", "الاعتماد", "التسليم", "المستلم"];
-        downloadTable("الطلبات", `laundry-orders-${stamp}.xls`, headers, buildOrdersExportRows(), "قائمة طلبات المغسلة");
-        toast("تم إنشاء ملف Excel.", "ok");
-      } catch (err) {
-        toast("تعذر إنشاء ملف Excel: " + err.message, "err");
+  const doExportPdf = () => {
+    try {
+      const { sections, orders } = buildOrdersExportSections();
+      if (!orders.length) {
+        toast("لا توجد طلبات مطابقة للتصدير.", "warn");
+        return;
       }
-    });
-  }
+      printReportSections(
+        "قائمة طلبات المغسلة الكاملة",
+        ordersExportMeta(),
+        sections,
+        ""
+      );
+      toast("تم إنشاء التقرير للطباعة (PDF).", "ok");
+    } catch (err) {
+      toast("تعذر إنشاء PDF: " + err.message, "err");
+    }
+  };
+  const doExportXls = () => {
+    try {
+      const { sections, orders } = buildOrdersExportSections();
+      if (!orders.length) {
+        toast("لا توجد طلبات مطابقة للتصدير.", "warn");
+        return;
+      }
+      const stamp = todayIso().replace(/-/g, "");
+      downloadSectionsXls(
+        `laundry-orders-${stamp}.xls`,
+        "الطلبات",
+        "قائمة طلبات المغسلة الكاملة",
+        ordersExportMeta(),
+        sections
+      );
+      toast("تم إنشاء ملف Excel.", "ok");
+    } catch (err) {
+      toast("تعذر إنشاء ملف Excel: " + err.message, "err");
+    }
+  };
+  const xlsBtn = $("#orders-export-xls");
+  if (xlsBtn) xlsBtn.addEventListener("click", doExportXls);
+  const pdfBtn = $("#orders-export-pdf");
+  if (pdfBtn) pdfBtn.addEventListener("click", doExportPdf);
   const csvBtn = $("#orders-export-csv");
   if (csvBtn) {
     csvBtn.addEventListener("click", () => {
       try {
+        const { sections, orders } = buildOrdersExportSections();
+        if (!orders.length) {
+          toast("لا توجد طلبات مطابقة للتصدير.", "warn");
+          return;
+        }
         const stamp = todayIso().replace(/-/g, "");
-        const headers = ["المرجع", "تاريخ الخدمة", "الموظف", "الكود", "الزائر", "الأصناف", "القيمة", "الحالة", "الاعتماد", "التسليم", "المستلم"];
-        downloadCsv(`laundry-orders-${stamp}.csv`, toCsv(headers, buildOrdersExportRows()));
-        toast("تم إنشاء ملف CSV.", "ok");
+        const main = sections[0];
+        downloadCsv(`laundry-orders-${stamp}.csv`, toCsv(main.headers, main.rows));
+        toast("تم إنشاء ملف CSV (الطلبات).", "ok");
       } catch (err) {
         toast("تعذر إنشاء CSV: " + err.message, "err");
       }
@@ -1451,14 +1794,20 @@ async function saveOrder() {
   };
   saveLocalOrder(order);
   enqueueOrder(order);
-  toast("تم حفظ الطلب على الجهاز.", "ok");
+  toast("تم حفظ الطلب — انتقل إلى مرحلة التسليم.", "ok");
 
   if (isOnline()) {
     const res = await syncOrders();
     if (res.pushed) toast(`تم إرسال ${res.pushed} طلب إلى الخادم.`, "ok");
   }
   draft = { employee: null, items: {}, person_name: "", notes: "", service_date: todayIso() };
+  // عرض الطلب الجديد دائماً: مسح الفلاتر ثم الانتقال وفتح التفاصيل (مرحلة التسليم).
+  ordersFilter = { delivery: "all", status: "all", q: "", from: "", to: "" };
+  ordersPage = 1;
+  // الطلب ينتهي مرحلة الإنشاء ويدخل مرحلة التسليم/الاستلام: تُعرض قائمة الطلبات مع فتح الطلب الجديد
+  // مباشرةً (يعمل دون اتصال — التسليم يُحفظ محلياً ويتزامن لاحقاً).
   setPage("orders");
+  showOrderDetail(clientUuid);
 }
 
 /* ---------- تفاصيل الطلب والإجراءات ---------- */
@@ -1476,7 +1825,8 @@ function orderActionButtons(order) {
   if ((role === "admin" || (role === "contractor" && reviewable)) && (!order.server_id || reviewable)) {
     buttons.push('<button class="btn btn-danger btn-sm" data-act="delete">حذف</button>');
   }
-  if (canManageOrders() && order.server_id && order.status !== "rejected" && remaining > 0.0001) {
+  if (canManageOrders() && order.status !== "rejected" && remaining > 0.0001) {
+    // التسليم متاح حتى للطلبات المحلية غير المُرسلة بعد — يعمل دون اتصال ويتزامن لاحقاً.
     buttons.push('<button class="btn btn-primary btn-sm" data-act="deliver">تسليم / استلام جزئي</button>');
   }
   if (canReviewOrders() && order.server_id && reviewable && order.fulfillment_status === "delivered" && remaining <= 0.0001) {
@@ -1820,7 +2170,7 @@ async function showDeliverModal(order) {
       receiver_name: receiverName,
     });
     if (!queued) {
-      toast("يجب إرسال الطلب إلى الخادم قبل تسجيل التسليم.", "warn");
+      toast("تعذر تسجيل التسليم على هذا الطلب.", "warn");
       return;
     }
     const res = await syncActions();
