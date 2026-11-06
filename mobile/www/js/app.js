@@ -469,14 +469,33 @@ VIEWS.orders = () => {
 
 /* ---------- تقرير الكميات والقيمة ---------- */
 
+/* فلتر الأصناف في تقرير الكميات: قائمة أسماء الأصناف المختارة (فارغة = كل الأصناف). */
+let reportItemFilter = [];
+
 function buildReportSections(from = reportRange.from, to = reportRange.to) {
   const local = localOrdersInRange(from, to);
+  const selected = new Set(reportItemFilter);
   const byEmployee = new Map();
   const byService = new Map();
+  const allNames = new Set();
   for (const order of local) {
     const emp = searchEmployee(order.employee_code);
     const serviceType = (emp && emp.service_type) || "غير محدد";
     const empKey = order.employee_code;
+    // وجّه أصناف الطلب أولاً: مع الفلتر يُحتسب الطلب فقط إن احتوى صنفاً مختاراً.
+    const itemLines = [];
+    for (const [itemId, line] of Object.entries(order.items || {})) {
+      const item = serviceItems().find((i) => String(i.id) === String(itemId));
+      const name = line.item_name || (item ? item.name : `صنف ${itemId}`);
+      allNames.add(name);
+      if (selected.size && !selected.has(name)) continue;
+      itemLines.push({
+        name,
+        qty: Number(line.quantity || 0),
+        value: Number(line.quantity || 0) * itemRate(line, itemId),
+      });
+    }
+    if (selected.size && !itemLines.length) continue;
     const empRow = byEmployee.get(empKey) || {
       code: order.employee_code,
       name: emp ? emp.name : (order.employee_name || order.employee_code),
@@ -489,17 +508,13 @@ function buildReportSections(from = reportRange.from, to = reportRange.to) {
     const svcRow = byService.get(serviceType) || { label: serviceType, items: {}, total: 0, value: 0, orders: 0 };
     empRow.orders += 1;
     svcRow.orders += 1;
-    for (const [itemId, line] of Object.entries(order.items || {})) {
-      const qty = Number(line.quantity || 0);
-      const item = serviceItems().find((i) => String(i.id) === String(itemId));
-      const name = line.item_name || (item ? item.name : `صنف ${itemId}`);
-      const value = qty * itemRate(line, itemId);
-      empRow.items[name] = (empRow.items[name] || 0) + qty;
-      svcRow.items[name] = (svcRow.items[name] || 0) + qty;
-      empRow.total += qty;
-      svcRow.total += qty;
-      empRow.value += value;
-      svcRow.value += value;
+    for (const line of itemLines) {
+      empRow.items[line.name] = (empRow.items[line.name] || 0) + line.qty;
+      svcRow.items[line.name] = (svcRow.items[line.name] || 0) + line.qty;
+      empRow.total += line.qty;
+      svcRow.total += line.qty;
+      empRow.value += line.value;
+      svcRow.value += line.value;
     }
     byEmployee.set(empKey, empRow);
     byService.set(serviceType, svcRow);
@@ -509,12 +524,14 @@ function buildReportSections(from = reportRange.from, to = reportRange.to) {
       meta: [`الفترة: ${from || "-"} إلى ${to || "-"}`, "لا توجد طلبات في هذه الفترة."],
       sections: [],
       totalValue: 0,
+      allItemNames: [...allNames].sort(),
       summary: { orders: 0, employees: 0, serviceTypes: 0, sent: 0, received: 0, value: 0 },
     };
   }
-  const itemNames = [...new Set(
-    [...byEmployee.values(), ...byService.values()].flatMap((r) => Object.keys(r.items))
-  )].sort();
+  // الأعمدة المعروضة: كل الأصناف، أو المختار منها فقط عند تفعيل فلتر الأصناف.
+  const itemNames = selected.size
+    ? [...selected].filter((n) => allNames.has(n)).sort()
+    : [...allNames].sort();
   const empHeaders = ["الاسم", "الكود", "نوع الخدمة", "عدد الطلبات", ...itemNames, "إجمالي الكمية", "قيمة الطلبات", "النسبة %"];
   const svcHeaders = ["نوع الخدمة", "عدد الطلبات", ...itemNames, "إجمالي الكمية", "قيمة الطلبات", "النسبة %"];
   const totalValue = [...byEmployee.values()].reduce((sum, r) => sum + r.value, 0);
@@ -557,6 +574,7 @@ function buildReportSections(from = reportRange.from, to = reportRange.to) {
   const issuedAt = new Date().toLocaleString("ar");
   const meta = [
     `الفترة: ${from || "-"} إلى ${to || "-"}`,
+    selected.size ? `الأصناف المختارة: ${[...selected].sort().join("، ")}` : "الأصناف: الكل",
     `عدد الطلبات: ${local.length} · ${byEmployee.size} موظف · ${byService.size} نوع خدمة`,
     `إجمالي قيمة الطلبات: ${money(totalValue)} ${settings().currency || ""}`,
     `تاريخ الإصدار: ${issuedAt}`,
@@ -564,6 +582,8 @@ function buildReportSections(from = reportRange.from, to = reportRange.to) {
   return {
     meta,
     totalValue,
+    allItemNames: [...allNames].sort(),
+    itemFilter: selected.size ? [...selected].sort() : [],
     summary: {
       orders: local.length,
       employees: byEmployee.size,
@@ -697,6 +717,17 @@ function reportsView() {
         <span>إظهار الساكنين غير النشطين</span>
       </label>` : ""}
       ${minNote}
+      ${!residents && report.allItemNames && report.allItemNames.length ? `
+      <div class="row small" style="flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0">
+        <span style="font-weight:600">فلتر الأصناف (اختيار متعدد):</span>
+        ${report.allItemNames.map((n) => `
+          <label class="row small" style="gap:5px;align-items:center;border:1px solid var(--line,#d6dde6);border-radius:10px;padding:5px 10px;margin:0">
+            <input type="checkbox" data-rpt-item="${esc(n)}" ${reportItemFilter.includes(n) ? "checked" : ""} style="width:auto;min-height:auto;margin:0">
+            <span>${esc(n)}</span>
+          </label>`).join("")}
+        ${reportItemFilter.length ? `<button class="btn btn-ghost btn-sm" id="rpt-items-clear">مسح اختيار الأصناف</button>`
+          : `<span class="small muted">بدون اختيار = كل الأصناف</span>`}
+      </div>` : ""}
       <div class="row" style="flex-wrap:wrap;gap:8px">
         <button class="btn btn-accent btn-sm" id="report-apply">تطبيق الفترة</button>
         <button class="btn btn-ghost btn-sm" id="report-refresh">تحديث من الخادم</button>
@@ -773,6 +804,26 @@ function bindReportsPage() {
     });
   }
 
+  /* فلتر الأصناف متعدد الاختيار: إعادة بناء التقرير والتصدير حسب المختار. */
+  $$("[data-rpt-item]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const name = cb.dataset.rptItem;
+      if (cb.checked) {
+        if (!reportItemFilter.includes(name)) reportItemFilter.push(name);
+      } else {
+        reportItemFilter = reportItemFilter.filter((n) => n !== name);
+      }
+      render();
+    });
+  });
+  const clearItems = $("#rpt-items-clear");
+  if (clearItems) {
+    clearItems.addEventListener("click", () => {
+      reportItemFilter = [];
+      render();
+    });
+  }
+
   const refreshBtn = $("#report-refresh");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", async () => {
@@ -788,7 +839,9 @@ function bindReportsPage() {
     ? buildResidentsReport(range.from, range.to, residentsShowInactive)
     : buildReportSections(range.from, range.to);
   const stamp = todayIso().replace(/-/g, "");
-  const title = residents ? "تقرير الساكنين — المغسلة" : "تقرير كميات المغسلة وقيمتها";
+  const title = residents
+    ? "تقرير الساكنين — المغسلة"
+    : "تقرير كميات المغسلة وقيمتها" + (report.itemFilter && report.itemFilter.length ? " — الأصناف: " + report.itemFilter.join("، ") : "");
   const fileBase = residents ? "laundry-residents" : "laundry-quantities";
 
   const xlsBtn = $("#rep-export-xls");
@@ -1810,6 +1863,106 @@ async function saveOrder() {
   showOrderDetail(clientUuid);
 }
 
+/* ---------- تصدير تفاصيل طلب واحد (PDF منسق / مشاركة واتساب) ---------- */
+
+/* يُبنى من حالة الطلب الحالية عند كل ضغطة: يظهر تفاصيل ما قبل التسليم وما بعده وتاريخ التغيّر. */
+function buildOrderDetailSections(order) {
+  const o = getOrderByUuid(order.client_uuid || order.uuid) || order;
+  const emp = searchEmployee(o.employee_code);
+  const name = emp ? emp.name : (o.employee_name || o.employee_code);
+  const isSent = o.sync_state === "created" || o.sync_state === "duplicate" || o.source === "server";
+  const deliveryState = orderDeliveryState(o);
+  const deliveryText = deliveryState === "received"
+    ? "مستلمة كاملة"
+    : deliveryState === "partial" ? "مستلمة جزئياً — بانتظار استلام الباقي" : "لم يتم الاستلام بعد";
+  const confirmer = orderConfirmerInfo(o);
+  const statusText = STATUS_LABELS[o.status] || (!o.status || o.status === "pending" ? "قيد الاعتماد" : o.status);
+  const role = currentRole();
+  const roleLabel = { admin: "مدير النظام", contractor: "متعهد المغسلة", supervisor: "مشرف السكن", super_admin: "مدير عام" }[role] || role || "";
+  const receipts = (Array.isArray(o.receipts) ? o.receipts : []).filter((r) => (r.items || []).length || r.receiver_name);
+  const fmt = (v) => String(v || "").replace("T", " ").slice(0, 16);
+  const meta = [
+    `الطلب: ${o.reference || (isSent ? "" : "محلي · بانتظار الإرسال") || o.client_uuid}`,
+    `الموظف: ${name} — الكود ${o.employee_code}${o.person_name ? " · الزائر: " + o.person_name : ""}`,
+    `تاريخ الخدمة: ${o.service_date || "-"} · تاريخ الإنشاء: ${fmt(o.created_at)}${orderCreatorName(o) ? " · أنشأ الطلب: " + orderCreatorName(o) : ""}`,
+    `حالة المراجعة: ${statusText}${o.status === "approved" ? ` · اعتمده: ${confirmer.value || "-"}` : ""}${o.status === "rejected" ? ` · سبب الرفض: ${o.rejection_reason || "-"}` : ""}`,
+    `حالة التسليم: ${deliveryText}${o.delivered_at ? ` · آخر تسليم: ${fmt(o.delivered_at)}` : ""}${receipts.length ? ` · عدد دفعات الاستلام: ${receipts.length}` : ""}`,
+    `القيمة الإجمالية: ${money(orderTotal(o))} ${settings().currency || ""}`,
+    `المستخدم: ${state.session?.full_name || ""} (${roleLabel}) · تاريخ الإصدار: ${new Date().toLocaleString("ar")}`,
+  ];
+  const items = Object.entries(o.items || {});
+  const itemRows = items.map(([itemId, line], index) => {
+    const item = serviceItems().find((i) => String(i.id) === String(itemId));
+    const received = Number(line.received_quantity || 0);
+    const remaining = Math.max(Number(line.quantity || 0) - received, 0);
+    return [
+      index + 1,
+      line.item_name || item?.name || itemId,
+      line.unit || (item ? item.unit : "") || "",
+      Number(line.quantity || 0),
+      received,
+      remaining,
+      Number(itemRate(line, itemId)),
+      Number((Number(line.quantity || 0) * itemRate(line, itemId)).toFixed(2)),
+    ];
+  });
+  const receiptRows = receipts.map((receipt, index) => {
+    const totalQty = (receipt.items || []).reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+    return [
+      index + 1,
+      fmt(receipt.received_at) || "-",
+      receipt.receiver_name || "نفس الموظف",
+      receipt.receiver_kind === "other" ? "شخص آخر" : "الموظف نفسه",
+      receipt.recorded_by_name || "",
+      (receipt.items || []).map((line) => `${line.item_name || "صنف"} × ${line.quantity}`).join(" | "),
+      Number(totalQty.toFixed(2)),
+    ];
+  });
+  const sections = [
+    {
+      heading: `أصناف الطلب (${items.length})`,
+      headers: ["#", "الصنف", "الوحدة", "الكمية المطلوبة", "الكمية المستلمة", "المتبقي", "سعر الوحدة", "الإجمالي"],
+      rows: itemRows,
+    },
+  ];
+  if (receiptRows.length) {
+    sections.push({
+      heading: `سجل دفعات الاستلام والمستلمين (${receiptRows.length})`,
+      headers: ["#", "التاريخ", "المستلم", "صفة المستلم", "رصدها", "الأصناف المستلمة", "عدد القطع"],
+      rows: receiptRows,
+    });
+  }
+  return { order: o, meta, sections, deliveryText, statusText, employeeName: name };
+}
+
+/* PDF منسق — يُطبَع أو يُحفَظ عبر PrintManager على الهاتف مباشرة من نافذة التفاصيل. */
+function printOrderDetail(order) {
+  try {
+    const { meta, sections } = buildOrderDetailSections(order);
+    printReportSections(`تفاصيل الطلب ${order.reference || ""}`.trim(), meta, sections, "");
+    toast("تم تجهيز تقرير الطلب (PDF).", "ok");
+  } catch (err) {
+    toast("تعذر تجهيز PDF: " + err.message, "err");
+  }
+}
+
+/* مشاركة كامل تفاصيل الطلب على واتساب أو أي تطبيق مشاركة. */
+function shareOrderToWhatsApp(order) {
+  try {
+    const { meta, sections, order: fresh } = buildOrderDetailSections(order);
+    const blocks = sections.map((section) => {
+      const head = `*${section.heading}*`;
+      const body = [section.headers.join(" | ")]
+        .concat(section.rows.map((cells) => cells.map((cell) => String(cell ?? "")).join(" | ")));
+      return [head, ...body].join("\n");
+    });
+    const subject = `*تفاصيل الطلب ${fresh.reference || fresh.client_uuid}*`;
+    shareText(subject, [subject, ...meta, "", ...blocks].join("\n"));
+  } catch (err) {
+    toast("تعذر المشاركة: " + err.message, "err");
+  }
+}
+
 /* ---------- تفاصيل الطلب والإجراءات ---------- */
 
 function orderActionButtons(order) {
@@ -1886,11 +2039,19 @@ function showOrderDetail(clientUuid) {
     <p class="small"><strong>القيمة الإجمالية:</strong> ${money(orderTotal(order))} ${esc(settings().currency || "")}</p>
     ${warnings ? `<div class="warn-box"><strong>تنبيهات:</strong><ul>${warnings}</ul></div>` : ""}
     ${orderActionButtons(order)}
+    <div class="modal-actions" style="flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" id="detail-export-pdf">تصدير PDF ▾</button>
+      <button class="btn btn-ghost btn-sm" id="detail-share-wa">مشاركة واتساب ▾</button>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" data-modal-close>إغلاق</button>
     </div>`);
   const closeBtn = $("#modal-box [data-modal-close]");
   if (closeBtn) closeBtn.addEventListener("click", closeModal);
+  const detailPdfBtn = $("#detail-export-pdf");
+  if (detailPdfBtn) detailPdfBtn.addEventListener("click", () => printOrderDetail(order));
+  const detailShareBtn = $("#detail-share-wa");
+  if (detailShareBtn) detailShareBtn.addEventListener("click", () => shareOrderToWhatsApp(order));
   const actions = $("#modal-box #order-actions");
   if (actions) {
     actions.addEventListener("click", (e) => {
