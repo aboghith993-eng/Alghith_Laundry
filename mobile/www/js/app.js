@@ -891,6 +891,22 @@ function bindReportsPage() {
 
 /* ---------- الإعدادات والحساب ---------- */
 
+/* بطاقة التحديث التلقائي (OTA): تظهر في الإعدادات و«حسابي» لكل المستخدمين. */
+function appUpdateCard() {
+  const live = (typeof window !== "undefined" && window.LaundryLive) || null;
+  if (!live) return "";
+  const running = live.version || live.bundledVersion;
+  const isLive = running && running !== live.bundledVersion;
+  return `
+    <div class="card">
+      <h3 class="card-title">تحديث التطبيق (تلقائي)</h3>
+      <p class="small muted">يتحقق التطبيق من الخادم عند كل فتح ويشغّل أحدث نسخة من الواجهة تلقائياً — بدون إعادة تثبيت وبدون أي فقدان للبيانات.</p>
+      <p class="small">إصدار النظام: <strong>${esc(String(live.bundledVersion).replace("bundle-", ""))}</strong> · الواجهة المحمّلة: <strong>${esc(isLive ? running : "النسخة الحالية")}</strong></p>
+      <button class="btn btn-ghost btn-block" id="cfg-live-check">فحص تحديث الآن</button>
+      <p class="small muted" id="cfg-live-status"></p>
+    </div>`;
+}
+
 VIEWS.account = () => {
   const user = state.session || {};
   const snap = snapshotMeta();
@@ -901,6 +917,7 @@ VIEWS.account = () => {
       <h3 class="card-title">معلومات الحساب</h3>
       <p class="small">${esc(user.full_name || user.username || "-")} — ${esc(ROLE_LABELS[user.role] || user.role || "-")}</p>
     </div>
+    ${appUpdateCard()}
     <div class="card">
       <h3 class="card-title">رمز الدخول المحلي ${pinReady ? '<span class="pill pill-synced">مفعّل على هذا الجهاز</span>' : '<span class="pill pill-local">غير مضبوط بعد</span>'}</h3>
       <p class="small muted">ضع رمزاً رقمياً لفتح التطبيق دون اتصال بالإنترنت (بعد أول تسجيل دخول). ${pinReady ? "يمكنك تغييره في أي وقت." : "ينصح بضبطه بعد أول دخول بالإنترنت حتى تستطيع فتح التطبيق والمواصلة العمل دون شبكة."}</p>
@@ -931,6 +948,7 @@ VIEWS.settings = () => {
       <h3 class="card-title">معلومات الحساب</h3>
       <p class="small">${esc(user.full_name || user.username || "-")} — ${esc(ROLE_LABELS[user.role] || user.role || "-")}</p>
     </div>
+    ${appUpdateCard()}
     <div class="card">
       <h3 class="card-title">عنوان الخادم (خاص بالمدير)</h3>
       <label class="field">
@@ -1346,6 +1364,35 @@ function bindSettingsPage() {
     logoutBtn.addEventListener("click", () => {
       clearSession();
       location.reload();
+    });
+  }
+  /* فحص التحديث التلقائي (OTA) يدوياً من الإعدادات أو «حسابي». */
+  const liveBtn = $("#cfg-live-check");
+  if (liveBtn) {
+    liveBtn.addEventListener("click", async () => {
+      const live = window.LaundryLive;
+      if (!live) {
+        toast("التحديث التلقائي غير متاح في هذه النسخة.", "warn");
+        return;
+      }
+      liveBtn.disabled = true;
+      const status = $("#cfg-live-status");
+      if (status) status.textContent = "جارٍ فحص الخادم…";
+      let res;
+      try {
+        res = await live.check();
+      } catch (err) {
+        res = { updated: false, message: "تعذر الفحص: " + err.message };
+      }
+      liveBtn.disabled = false;
+      if (status) status.textContent = res.message || "";
+      if (res.updated) {
+        toast("تم تنزيل التحديث — سيُطبَّق عند إعادة فتح التطبيق.", "ok");
+        // إعادة الإقلاع تلقائياً بعد لحظات ليشتغل التطبيق على أحدث نسخة فوراً.
+        setTimeout(() => location.reload(), 2200);
+      } else {
+        toast(res.message || "التطبيق محدَّث لآخر إصدار.", "ok");
+      }
     });
   }
 }

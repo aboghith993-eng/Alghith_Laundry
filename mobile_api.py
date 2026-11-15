@@ -254,6 +254,77 @@ def ping() -> Any:
     return jsonify({"ok": True, "app": "Laundry Management", "api": "mobile-v2"})
 
 
+# ---------------------------------------------------------------------------
+# التحديث التلقائي لواجهة الجوال (OTA Live Update)
+# يقرأ التطبيق هذه النقطة عند كل فتح: إن تغيّر بصمة ملفات الواجهة (JS/CSS)
+# في المستودع المنشور، يحمّل التطبيق النسخة الأحدث ويشغّلها فوراً دون APK جديد
+# ودون أي مساس ببيانات الجهاز (localStorage يبقى كما هو).
+# ---------------------------------------------------------------------------
+
+MOBILE_WWW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mobile", "www")
+MOBILE_OTA_FILES = (
+    "js/bootstrap.js",
+    "js/app.js",
+    "js/store.js",
+    "js/export.js",
+    "js/shift.js",
+    "css/app.css",
+)
+_MOBILE_OTA_CACHE: dict[str, Any] | None = None
+
+
+def _mobile_ota_bundle() -> dict[str, Any]:
+    """يبني حزمة التحديث من مجلد mobile/www (تُحسب مرة عند كل تشغيل الخادم)."""
+    global _MOBILE_OTA_CACHE
+    if _MOBILE_OTA_CACHE is not None:
+        return _MOBILE_OTA_CACHE
+    import hashlib
+
+    files: dict[str, str] = {}
+    digest = hashlib.sha256()
+    for rel in MOBILE_OTA_FILES:
+        path = os.path.join(MOBILE_WWW_DIR, *rel.split("/"))
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as handle:
+            data = handle.read()
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(data)
+        files[rel] = data.decode("utf-8")
+    version = "ota-" + digest.hexdigest()[:12]
+    _MOBILE_OTA_CACHE = {"version": version, "entry": "js/bootstrap.js", "files": files}
+    return _MOBILE_OTA_CACHE
+
+
+@bp.route("/api/mobile/ota/manifest", methods=["GET"])
+def api_mobile_ota_manifest() -> Any:
+    """حزمة واجهة التطبيق كاملة في طلب واحد: الإصدار + نص كل ملفات JS/CSS."""
+    bundle = _mobile_ota_bundle()
+    return jsonify(
+        {
+            "ok": True,
+            "version": bundle["version"],
+            "entry": bundle["entry"],
+            "files": bundle["files"],
+        }
+    )
+
+
+@bp.route("/api/mobile/ota/status", methods=["GET"])
+def api_mobile_ota_status() -> Any:
+    """معلومات مختصرة عن إصدار الواجهة المنشور (للعرض في الإعدادات)."""
+    bundle = _mobile_ota_bundle()
+    return jsonify(
+        {
+            "ok": True,
+            "version": bundle["version"],
+            "files": sorted(bundle["files"]),
+            "size": sum(len(code) for code in bundle["files"].values()),
+        }
+    )
+
+
 @bp.route("/api/auth/login", methods=["POST"])
 def api_login() -> Any:
     from app import get_db
